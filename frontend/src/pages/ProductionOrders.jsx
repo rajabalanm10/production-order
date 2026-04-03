@@ -33,24 +33,19 @@ function ProductionOrders() {
 
   const loadConfirmations = async () => {
     try {
-      const storedConfirmations = JSON.parse(localStorage.getItem('productionConfirmations') || '[]');
-      const storedReceipts = JSON.parse(localStorage.getItem('goodsReceipts') || '[]');
+      console.log('[Production Orders] Fetching confirmations from SAP...');
       
-      const allConfirmations = [
-        ...storedConfirmations.map(conf => ({
-          ...conf,
-          type: 'CONFIRMATION'
-        })),
-        ...storedReceipts.map(receipt => ({
-          ...receipt,
-          type: 'GOODS_RECEIPT'
-        }))
-      ];
+      const response = await fetch('/api/production-orders/confirmations');
       
-      setConfirmations(allConfirmations);
-      console.log('[Production Orders] Loaded confirmations:', allConfirmations.length);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          setConfirmations(data.data || []);
+          console.log('[Production Orders] Loaded confirmations from SAP:', data.data?.length || 0);
+        }
+      }
     } catch (err) {
-      console.error('Failed to load confirmations:', err);
+      console.error('Failed to load confirmations from SAP:', err);
     }
   };
 
@@ -311,12 +306,12 @@ function ProductionOrders() {
                 <div>
                   <h3 style={{ margin: 0, color: '#1976d2' }}>Production Orders from SAP</h3>
                   <div style={{ marginTop: '0.25rem', color: '#666', fontSize: '0.9rem' }}>
-                    {totalRecords} records • LIVE SAP via Kiro Bridge • RFC_READ_TABLE
+                    <strong style={{ color: '#1976d2', fontSize: '1.1rem' }}>{totalRecords || filteredOrders.length}</strong> total records • LIVE SAP via MCP • RFC_READ_TABLE
                   </div>
                 </div>
                 <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '0.9rem', color: '#666' }}>
-                    Showing {paginatedOrders.length} of {totalRecords}
+                  <div style={{ fontSize: '1rem', color: '#1976d2', fontWeight: 'bold' }}>
+                    Showing {startIndex + 1}-{Math.min(endIndex, totalRecords || filteredOrders.length)} of {totalRecords || filteredOrders.length}
                   </div>
                   <div style={{ fontSize: '0.8rem', color: '#999', marginTop: '0.25rem' }}>
                     Page {currentPage} of {totalPages}
@@ -334,9 +329,10 @@ function ProductionOrders() {
                     <tr style={{ background: '#1976d2', color: 'white' }}>
                       <th style={{ padding: '0.75rem', textAlign: 'left' }}>Order ID</th>
                       <th style={{ padding: '0.75rem', textAlign: 'left' }}>Plant</th>
-                      <th style={{ padding: '0.75rem', textAlign: 'left' }}>Order Type</th>
-                      <th style={{ padding: '0.75rem', textAlign: 'left' }}>Created Date</th>
-                      <th style={{ padding: '0.75rem', textAlign: 'left' }}>Created By</th>
+                      <th style={{ padding: '0.75rem', textAlign: 'left' }}>Material</th>
+                      <th style={{ padding: '0.75rem', textAlign: 'right' }}>Order Qty</th>
+                      <th style={{ padding: '0.75rem', textAlign: 'right' }}>Received Qty</th>
+                      <th style={{ padding: '0.75rem', textAlign: 'right' }}>Progress</th>
                       <th style={{ padding: '0.75rem', textAlign: 'left' }}>Status</th>
                       <th style={{ padding: '0.75rem', textAlign: 'left' }}>Actions</th>
                     </tr>
@@ -354,9 +350,36 @@ function ProductionOrders() {
                           {order.PRODUCTION_ORDER}
                         </td>
                         <td style={{ padding: '0.75rem' }}>{order.PLANT}</td>
-                        <td style={{ padding: '0.75rem' }}>{order.ORDER_TYPE}</td>
-                        <td style={{ padding: '0.75rem' }}>{order.CREATED_DATE}</td>
-                        <td style={{ padding: '0.75rem' }}>{order.CREATED_BY}</td>
+                        <td style={{ padding: '0.75rem' }}>
+                          {order.MATERIAL || 'N/A'}
+                        </td>
+                        <td style={{ padding: '0.75rem', textAlign: 'right' }}>
+                          {parseFloat(order.ORDER_QUANTITY || 0).toFixed(2)} {order.UNIT}
+                        </td>
+                        <td style={{ padding: '0.75rem', textAlign: 'right' }}>
+                          {parseFloat(order.RECEIVED_QUANTITY || 0).toFixed(2)} {order.UNIT}
+                        </td>
+                        <td style={{ padding: '0.75rem', textAlign: 'right' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <div style={{ 
+                              flex: 1, 
+                              height: '8px', 
+                              background: '#e0e0e0', 
+                              borderRadius: '4px',
+                              overflow: 'hidden'
+                            }}>
+                              <div style={{ 
+                                width: `${Math.min(order.PROGRESS_PERCENT || 0, 100)}%`, 
+                                height: '100%', 
+                                background: order.PROGRESS_PERCENT >= 100 ? '#4caf50' : '#2196f3',
+                                transition: 'width 0.3s'
+                              }} />
+                            </div>
+                            <span style={{ fontSize: '0.85rem', minWidth: '40px' }}>
+                              {order.PROGRESS_PERCENT || 0}%
+                            </span>
+                          </div>
+                        </td>
                         <td style={{ padding: '0.75rem' }}>
                           <span style={{ 
                             color: getStatusColor(order.STATUS), 
@@ -398,8 +421,8 @@ function ProductionOrders() {
                   background: '#f9f9f9',
                   borderRadius: '4px'
                 }}>
-                  <div style={{ color: '#666' }}>
-                    Showing {startIndex + 1} to {Math.min(endIndex, totalRecords)} of {totalRecords}
+                  <div style={{ color: '#666', fontSize: '0.9rem' }}>
+                    Showing <strong>{startIndex + 1}</strong> to <strong>{Math.min(endIndex, totalRecords || filteredOrders.length)}</strong> of <strong>{totalRecords || filteredOrders.length}</strong> total records
                   </div>
                   
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -503,8 +526,8 @@ function ProductionOrders() {
                     </button>
                   </div>
                   
-                  <div style={{ color: '#666' }}>
-                    Page {currentPage} of {totalPages}
+                  <div style={{ color: '#666', fontSize: '0.9rem' }}>
+                    Page <strong>{currentPage}</strong> of <strong>{totalPages}</strong>
                   </div>
                 </div>
               )}
@@ -653,8 +676,53 @@ function ProductionOrders() {
                 <div style={{ marginBottom: '1rem' }}>{selectedOrder.PLANT}</div>
               </div>
               <div>
+                <strong>Material:</strong>
+                <div style={{ marginBottom: '1rem' }}>{selectedOrder.MATERIAL || 'N/A'}</div>
+              </div>
+              <div>
                 <strong>Order Type:</strong>
                 <div style={{ marginBottom: '1rem' }}>{selectedOrder.ORDER_TYPE}</div>
+              </div>
+              <div>
+                <strong>Order Quantity:</strong>
+                <div style={{ marginBottom: '1rem', fontSize: '1.1rem', fontWeight: 'bold', color: '#1976d2' }}>
+                  {parseFloat(selectedOrder.ORDER_QUANTITY || 0).toFixed(2)} {selectedOrder.UNIT}
+                </div>
+              </div>
+              <div>
+                <strong>Received Quantity:</strong>
+                <div style={{ marginBottom: '1rem', fontSize: '1.1rem', fontWeight: 'bold', color: '#4caf50' }}>
+                  {parseFloat(selectedOrder.RECEIVED_QUANTITY || 0).toFixed(2)} {selectedOrder.UNIT}
+                </div>
+              </div>
+              <div>
+                <strong>Confirmed Quantity:</strong>
+                <div style={{ marginBottom: '1rem' }}>
+                  {parseFloat(selectedOrder.CONFIRMED_QUANTITY || 0).toFixed(3)} {selectedOrder.UNIT}
+                </div>
+              </div>
+              <div>
+                <strong>Progress:</strong>
+                <div style={{ marginBottom: '1rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <div style={{ 
+                      flex: 1, 
+                      height: '12px', 
+                      background: '#e0e0e0', 
+                      borderRadius: '6px',
+                      overflow: 'hidden'
+                    }}>
+                      <div style={{ 
+                        width: `${Math.min(selectedOrder.PROGRESS_PERCENT || 0, 100)}%`, 
+                        height: '100%', 
+                        background: selectedOrder.PROGRESS_PERCENT >= 100 ? '#4caf50' : '#2196f3'
+                      }} />
+                    </div>
+                    <span style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>
+                      {selectedOrder.PROGRESS_PERCENT || 0}%
+                    </span>
+                  </div>
+                </div>
               </div>
               <div>
                 <strong>Status:</strong>
@@ -688,7 +756,7 @@ function ProductionOrders() {
                     color: '#1976d2',
                     fontSize: '0.9rem'
                   }}>
-                    🔴 LIVE SAP - RFC_READ_TABLE (AUFK)
+                    🔴 LIVE SAP - RFC_READ_TABLE (AUFK + AFPO)
                   </span>
                 </div>
               </div>

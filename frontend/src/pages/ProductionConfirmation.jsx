@@ -41,8 +41,19 @@ function ProductionConfirmation() {
 
       if (data.success) {
         setResult(data);
+        console.log('[Production Confirmation] ✅ Posted to SAP successfully');
       } else {
-        setError(data.error || 'Failed to confirm production order');
+        // Show detailed error from SAP
+        let errorMsg = data.error || 'Failed to confirm production order';
+        
+        // Add helpful hints based on error type
+        if (errorMsg.includes('not released')) {
+          errorMsg += '\n\nThe production order must be released in SAP before it can be confirmed. Please release the order first.';
+        } else if (errorMsg.includes('work center') || errorMsg.includes('operation')) {
+          errorMsg += '\n\nWork center or operation information may be required. Please provide these details.';
+        }
+        
+        setError(errorMsg);
       }
     } catch (err) {
       setError(err.message || 'Network error occurred');

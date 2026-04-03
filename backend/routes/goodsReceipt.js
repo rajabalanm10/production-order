@@ -4,11 +4,15 @@
  */
 
 import express from "express";
+import { searchSapBapi, executeSapFunction, connect, isConnected } from "../services/mcpStreamClient.js";
 
 const router = express.Router();
 
-// In-memory storage for goods receipts
-const goodsReceipts = {};
+// Try to connect to MCP server on startup
+connect().catch(err => {
+  console.error('[Goods Receipt] MCP connection failed:', err.message);
+  console.log('[Goods Receipt] Will retry on first request');
+});
 
 /**
  * POST /api/goods-receipt/search
@@ -18,8 +22,27 @@ router.post("/search", async (req, res) => {
   try {
     console.log("[Goods Receipt] Search request received");
 
-    const searchQuery = "goods receipt production order MM";
-    const searchResults = await searchBAPI(searchQuery);
+    if (!isConnected()) {
+      console.log('[Goods Receipt] Not connected, attempting connection...');
+      await connect();
+    }
+
+    const searchPayload = {
+      name: "Goods Receipt",
+      description: "Find BAPIs for posting goods receipt",
+      apis: [{
+        name: "MM",
+        description: "Materials Management",
+        system_type: "SAP_ECC",
+        functions: [{
+          name: "GOODS_RECEIPT",
+          description: "Post Goods Receipt",
+          rfc: true
+        }]
+      }]
+    };
+
+    const searchResults = await searchSapBapi(searchPayload);
 
     res.json({
       success: true,
@@ -69,16 +92,38 @@ router.post("/post", async (req, res) => {
       });
     }
 
+    if (!isConnected()) {
+      console.log('[Goods Receipt] Not connected, attempting connection...');
+      await connect();
+    }
+
     // Step 1: Search for appropriate BAPI
     console.log("[Goods Receipt] Step 1: Searching for BAPI...");
-    const searchResults = await searchBAPI("goods receipt production order");
     
-    // Step 2: Select BAPI (use first available or fallback)
+    const searchPayload = {
+      name: "Goods Receipt",
+      description: "Find BAPIs for posting goods receipt",
+      apis: [{
+        name: "MM",
+        description: "Materials Management",
+        system_type: "SAP_ECC",
+        functions: [{
+          name: "GOODS_RECEIPT",
+          description: "Post Goods Receipt",
+          rfc: true
+        }]
+      }]
+    };
+
     let selectedBAPI = "BAPI_GOODSMVT_CREATE";
-    if (searchResults.results?.apis?.[1]?.functions?.[0]?.name) {
-      selectedBAPI = searchResults.results.apis[1].functions[0].name;
-    } else {
-      selectedBAPI = getFallbackBAPI("goods_receipt");
+    
+    try {
+      const searchResults = await searchSapBapi(searchPayload);
+      if (searchResults?.apis?.[0]?.functions?.[0]?.name) {
+        selectedBAPI = searchResults.apis[0].functions[0].name;
+      }
+    } catch (searchError) {
+      console.log("[Goods Receipt] Search failed, using default BAPI:", searchError.message);
     }
 
     console.log(`[Goods Receipt] Step 2: Selected BAPI: ${selectedBAPI}`);
@@ -104,33 +149,21 @@ router.post("/post", async (req, res) => {
       MATERIAL_DOCUMENT_YEAR: "string"
     };
 
-    // Step 5: Execute BAPI
-    console.log("[Goods Receipt] Step 3: Executing BAPI...");
-    const executionResult = await executeBAPI(selectedBAPI, inputData, expectedOutputStructure);
+    // Step 5: Execute BAPI and post to SAP
+    console.log("[Goods Receipt] Step 3: Executing BAPI and posting to SAP...");
+    const executionResult = await executeSapFunction(selectedBAPI, inputData, expectedOutputStructure);
 
-    // Step 6: Store goods receipt in memory (for this session only)
-    const receiptId = `GR-${Date.now()}`;
-    goodsReceipts[receiptId] = {
-      id: receiptId,
-      productionOrderId,
-      material,
-      plant,
-      receivedQuantity,
-      storageLocation,
-      selectedBAPI,
-      executionResult,
-      timestamp: new Date().toISOString()
-    };
-
-    console.log("[Goods Receipt] Goods receipt posted to SAP:", receiptId);
+    console.log("[Goods Receipt] ✅ Goods receipt posted to SAP successfully");
 
     res.json({
       success: true,
-      receiptId,
+      receiptId: executionResult.MATERIAL_DOCUMENT || `GR-${Date.now()}`,
       selectedBAPI,
       requestPayload: inputData,
       sapResponse: executionResult,
-      message: "Goods receipt posted successfully"
+      message: "Goods receipt posted successfully to SAP",
+      liveSapCall: true,
+      timestamp: new Date().toISOString()
     });
   } catch (error) {
     console.error("[Goods Receipt] Post error:", error);
@@ -143,21 +176,58 @@ router.post("/post", async (req, res) => {
 
 /**
  * GET /api/goods-receipt/:id
- * Get goods receipt details
+ * Get goods receipt details from SAP
  */
-router.get("/:id", (req, res) => {
-  const receipt = goodsReceipts[req.params.id];
-  if (!receipt) {
-    return res.status(404).json({
+router.get("/:id", async (req, res) => {
+  try {
+    const receiptId = req.params.id;
+    
+    console.log("[Goods Receipt] Getting receipt from SAP:", receiptId);
+
+    if (!isConnected()) {
+      console.log('[Goods Receipt] Not connected, attempting connection...');
+      await connect();
+    }
+
+    // Call SAP to get goods receipt details
+    const result = await executeSapFunction(
+      'BAPI_GOODSMVT_GET_DETAIL',
+      {
+        MATERIALDOCUMENT: receiptId
+      },
+      {
+        RETURN: { TYPE: 'string', MESSAGE: 'string' },
+        GOODSMVT_HEADER: {
+          DOC_DATE: 'string',
+          PSTNG_DATE: 'string',
+          REF_DOC_NO: 'string'
+        },
+        GOODSMVT_ITEMS: [{
+          MATERIAL: 'string',
+          PLANT: 'string',
+          STGE_LOC: 'string',
+          QUANTITY: 'string'
+        }]
+      }
+    );
+
+    if (result.RETURN && result.RETURN.TYPE === 'E') {
+      throw new Error(result.RETURN.MESSAGE || 'Goods receipt not found in SAP');
+    }
+
+    res.json({
+      success: true,
+      data: result,
+      source: "LIVE_SAP_VIA_MCP",
+      liveSapCall: true
+    });
+  } catch (error) {
+    console.error("[Goods Receipt] Error:", error);
+    res.status(500).json({
       success: false,
-      error: "Goods receipt not found"
+      error: error.message
     });
   }
-
-  res.json({
-    success: true,
-    data: receipt
-  });
 });
 
 export default router;

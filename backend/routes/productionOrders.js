@@ -36,16 +36,19 @@ router.get("/confirmations", async (req, res) => {
       }
     }
 
-    // Call SAP via MCP client - using only valid fields
+    // Call SAP to get confirmations from AFRU table (Production order confirmations)
     const result = await executeSapFunction(
       'RFC_READ_TABLE',
       {
-        QUERY_TABLE: 'AUFK',
+        QUERY_TABLE: 'AFRU',
         DELIMITER: '|',
         FIELDS: [
-          { FIELDNAME: 'AUFNR' },
-          { FIELDNAME: 'WERKS' },
-          { FIELDNAME: 'AUART' }
+          { FIELDNAME: 'RUECK' },  // Confirmation number
+          { FIELDNAME: 'AUFNR' },  // Order number
+          { FIELDNAME: 'WERKS' },  // Plant
+          { FIELDNAME: 'LMNGA' },  // Yield quantity
+          { FIELDNAME: 'XMNGA' },  // Scrap quantity
+          { FIELDNAME: 'BUDAT' }   // Posting date
         ],
         OPTIONS: [{ TEXT: "WERKS IN ('0001', '0002')" }],
         ROWCOUNT: 100
@@ -55,16 +58,16 @@ router.get("/confirmations", async (req, res) => {
       }
     );
 
-    const orders = parseSapTableData(result);
+    const confirmations = parseConfirmationData(result);
     
-    console.log(`[Production Orders] Found ${orders.length} confirmations`);
+    console.log(`[Production Orders] Found ${confirmations.length} confirmations from SAP`);
 
     res.json({
       success: true,
-      count: orders.length,
-      data: orders,
-      source: "LIVE_SAP_VIA_MCP_CLIENT",
-      message: `Found ${orders.length} production order confirmations`,
+      count: confirmations.length,
+      data: confirmations,
+      source: "LIVE_SAP_VIA_MCP",
+      message: `Found ${confirmations.length} production order confirmations`,
       timestamp: new Date().toISOString(),
       liveSapCall: true
     });
@@ -111,8 +114,8 @@ router.post("/search", async (req, res) => {
     
     console.log("[Production Orders] Calling SAP via MCP client...");
     
-    // Call SAP via MCP client - Fetch ALL records with high ROWCOUNT
-    const result = await executeSapFunction(
+    // First, get order headers from AUFK
+    const headerResult = await executeSapFunction(
       'RFC_READ_TABLE',
       {
         QUERY_TABLE: 'AUFK',
@@ -122,7 +125,8 @@ router.post("/search", async (req, res) => {
           { FIELDNAME: 'WERKS' },  // Plant
           { FIELDNAME: 'AUART' },  // Order type
           { FIELDNAME: 'ERDAT' },  // Created date
-          { FIELDNAME: 'ERNAM' }   // Created by
+          { FIELDNAME: 'ERNAM' },  // Created by
+          { FIELDNAME: 'FTRMI' }   // Release date (if released, this will have a date)
         ],
         OPTIONS: options.length > 0 ? options : [{ TEXT: "WERKS IN ('0001', '0002')" }],
         ROWCOUNT: 9999  // High number to fetch all available records
@@ -132,10 +136,42 @@ router.post("/search", async (req, res) => {
       }
     );
 
+    console.log("[Production Orders] Header data received, fetching quantity details...");
+
+    // Then get quantity details from AFPO (Production order items)
+    const quantityResult = await executeSapFunction(
+      'RFC_READ_TABLE',
+      {
+        QUERY_TABLE: 'AFPO',
+        DELIMITER: '|',
+        FIELDS: [
+          { FIELDNAME: 'AUFNR' },  // Order number
+          { FIELDNAME: 'MATNR' },  // Material
+          { FIELDNAME: 'PSMNG' },  // Order quantity
+          { FIELDNAME: 'MEINS' },  // Unit of measure
+          { FIELDNAME: 'WEMNG' }   // Goods receipt quantity
+        ],
+        OPTIONS: options.length > 0 ? options : [{ TEXT: "WERKS IN ('0001', '0002')" }],
+        ROWCOUNT: 9999
+      },
+      {
+        DATA: [{ WA: 'string' }]
+      }
+    );
+
+    console.log("[Production Orders] Quantity data received, merging results...");
+
+    // Parse both results
+    const headers = parseSapTableData(headerResult);
+    const quantities = parseAfpoData(quantityResult);
+
+    // Merge header and quantity data
+    const result = mergeOrderData(headers, quantities);
+
     console.log("[Production Orders] SAP response received");
 
-    // Parse SAP response
-    let orders = parseSapTableData(result);
+    // Parse SAP response - result is already merged
+    let orders = result;
 
     // Apply filters
     if (material) {
@@ -270,7 +306,7 @@ router.get("/:orderId", async (req, res) => {
 });
 
 /**
- * Helper function to parse SAP RFC_READ_TABLE response
+ * Helper function to parse SAP RFC_READ_TABLE response from AUFK
  */
 function parseSapTableData(result) {
   if (!result.DATA || !Array.isArray(result.DATA)) {
@@ -283,6 +319,13 @@ function parseSapTableData(result) {
     if (!row.WA) continue;
     
     const fields = row.WA.split('|');
+    const releaseDate = fields[5]?.trim() || '';
+    
+    // Determine status based on release date
+    let status = 'CREATED';
+    if (releaseDate && releaseDate !== '00000000') {
+      status = 'RELEASED';
+    }
     
     orders.push({
       PRODUCTION_ORDER: fields[0]?.trim() || '',
@@ -290,21 +333,105 @@ function parseSapTableData(result) {
       ORDER_TYPE: fields[2]?.trim() || 'PP01',
       CREATED_DATE: fields[3]?.trim() || '',
       CREATED_BY: fields[4]?.trim() || '',
-      // Fields not available in AUFK table for this SAP system
-      ORDER_QUANTITY: '0',
-      UNIT: '',
-      START_DATE: '',
-      FINISH_DATE: '',
-      MATERIAL: '',
-      CONFIRMED_QUANTITY: '0.000',
-      RECEIVED_QUANTITY: '0.000',
-      STATUS: 'RELEASED',
-      PROGRESS_PERCENT: 0,
+      RELEASE_DATE: releaseDate,
+      STATUS: status,
       SOURCE: 'LIVE_SAP'
     });
   }
 
   return orders;
+}
+
+/**
+ * Helper function to parse AFRU (Production order confirmations) data
+ */
+function parseConfirmationData(result) {
+  if (!result.DATA || !Array.isArray(result.DATA)) {
+    return [];
+  }
+
+  const confirmations = [];
+  
+  for (const row of result.DATA) {
+    if (!row.WA) continue;
+    
+    const fields = row.WA.split('|');
+    
+    confirmations.push({
+      confirmationId: fields[0]?.trim() || '',
+      productionOrderId: fields[1]?.trim() || '',
+      plant: fields[2]?.trim() || '',
+      yieldQuantity: fields[3]?.trim() || '0',
+      scrapQuantity: fields[4]?.trim() || '0',
+      postingDate: fields[5]?.trim() || '',
+      type: 'CONFIRMATION',
+      timestamp: fields[5]?.trim() || new Date().toISOString()
+    });
+  }
+
+  return confirmations;
+}
+
+/**
+ * Helper function to parse AFPO (Production order items) data
+ */
+function parseAfpoData(result) {
+  if (!result.DATA || !Array.isArray(result.DATA)) {
+    return {};
+  }
+
+  const quantities = {};
+  
+  for (const row of result.DATA) {
+    if (!row.WA) continue;
+    
+    const fields = row.WA.split('|');
+    const orderNumber = fields[0]?.trim() || '';
+    
+    if (orderNumber) {
+      quantities[orderNumber] = {
+        MATERIAL: fields[1]?.trim() || '',
+        ORDER_QUANTITY: fields[2]?.trim() || '0',
+        UNIT: fields[3]?.trim() || '',
+        RECEIVED_QUANTITY: fields[4]?.trim() || '0'
+      };
+    }
+  }
+
+  return quantities;
+}
+
+/**
+ * Merge header data with quantity data
+ */
+function mergeOrderData(headers, quantities) {
+  return headers.map(order => {
+    const orderNum = order.PRODUCTION_ORDER;
+    const quantityData = quantities[orderNum] || {
+      MATERIAL: '',
+      ORDER_QUANTITY: '0',
+      UNIT: '',
+      RECEIVED_QUANTITY: '0'
+    };
+
+    // Calculate confirmed quantity (same as received for now)
+    const orderQty = parseFloat(quantityData.ORDER_QUANTITY) || 0;
+    const receivedQty = parseFloat(quantityData.RECEIVED_QUANTITY) || 0;
+    const confirmedQty = receivedQty;
+    const progressPercent = orderQty > 0 ? Math.round((confirmedQty / orderQty) * 100) : 0;
+
+    return {
+      ...order,
+      MATERIAL: quantityData.MATERIAL,
+      ORDER_QUANTITY: quantityData.ORDER_QUANTITY,
+      UNIT: quantityData.UNIT,
+      RECEIVED_QUANTITY: quantityData.RECEIVED_QUANTITY,
+      CONFIRMED_QUANTITY: confirmedQty.toFixed(3),
+      PROGRESS_PERCENT: progressPercent,
+      START_DATE: '',
+      FINISH_DATE: ''
+    };
+  });
 }
 
 export default router;
