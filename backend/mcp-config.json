@@ -1,0 +1,10 @@
+{
+  "type": "http",
+  "url": "https://flow.pillir.ai/mcp/sse",
+  "headers": {
+    "X-FLOW-API-KEY": "jux8l5taT5QVpngFY6rVLoCTe3YyVVk9_yEyFYstz4o",
+    "mcp-protocol-version": "2024-11-05"
+  },
+  "enabled": true,
+  "note": "Trying multiple connection strategies to connect to Pillir Flow MCP"
+}
