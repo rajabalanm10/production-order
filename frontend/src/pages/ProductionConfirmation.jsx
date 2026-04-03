@@ -78,7 +78,10 @@ function ProductionConfirmation() {
 
   return (
     <div className="page">
-      <h2>Production Order Confirmation</h2>
+      <div className="page-header">
+        <h2>Production Order Confirmation</h2>
+        <p className="page-description">Confirm production order completion and record yield quantities</p>
+      </div>
       
       <form onSubmit={handleSubmit}>
         <div className="form-row">
@@ -91,7 +94,7 @@ function ProductionConfirmation() {
               value={formData.productionOrderId}
               onChange={handleChange}
               required
-              placeholder="e.g., 1000001234"
+              placeholder="Enter production order number"
             />
           </div>
 
@@ -104,7 +107,7 @@ function ProductionConfirmation() {
               value={formData.plant}
               onChange={handleChange}
               required
-              placeholder="e.g., 1000"
+              placeholder="Enter plant code"
             />
           </div>
         </div>
@@ -118,7 +121,7 @@ function ProductionConfirmation() {
               name="material"
               value={formData.material}
               onChange={handleChange}
-              placeholder="Leave empty if not available"
+              placeholder="Optional"
             />
           </div>
 
@@ -130,7 +133,7 @@ function ProductionConfirmation() {
               name="workCenter"
               value={formData.workCenter}
               onChange={handleChange}
-              placeholder="e.g., WC-001"
+              placeholder="Enter work center"
             />
           </div>
         </div>
@@ -147,7 +150,7 @@ function ProductionConfirmation() {
               required
               min="0"
               step="0.01"
-              placeholder="e.g., 100"
+              placeholder="Enter confirmed quantity"
             />
           </div>
 
@@ -161,7 +164,7 @@ function ProductionConfirmation() {
               onChange={handleChange}
               min="0"
               step="0.01"
-              placeholder="e.g., 5"
+              placeholder="Enter scrap quantity"
             />
           </div>
         </div>

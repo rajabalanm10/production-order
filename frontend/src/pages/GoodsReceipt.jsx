@@ -63,7 +63,10 @@ function GoodsReceipt() {
 
   return (
     <div className="page">
-      <h2>Goods Receipt</h2>
+      <div className="page-header">
+        <h2>Goods Receipt</h2>
+        <p className="page-description">Post goods receipt for completed production orders</p>
+      </div>
       
       <form onSubmit={handleSubmit}>
         <div className="form-row">
@@ -76,7 +79,7 @@ function GoodsReceipt() {
               value={formData.productionOrderId}
               onChange={handleChange}
               required
-              placeholder="e.g., 1000001234"
+              placeholder="Enter production order number"
             />
           </div>
 
@@ -89,7 +92,7 @@ function GoodsReceipt() {
               value={formData.material}
               onChange={handleChange}
               required
-              placeholder="e.g., MAT-12345"
+              placeholder="Enter material number"
             />
           </div>
         </div>
@@ -104,7 +107,7 @@ function GoodsReceipt() {
               value={formData.plant}
               onChange={handleChange}
               required
-              placeholder="e.g., 1000"
+              placeholder="Enter plant code"
             />
           </div>
 
@@ -116,7 +119,7 @@ function GoodsReceipt() {
               name="storageLocation"
               value={formData.storageLocation}
               onChange={handleChange}
-              placeholder="e.g., 0001"
+              placeholder="Enter storage location"
             />
           </div>
         </div>
@@ -132,7 +135,7 @@ function GoodsReceipt() {
             required
             min="0"
             step="0.01"
-            placeholder="e.g., 100"
+            placeholder="Enter received quantity"
           />
         </div>
 

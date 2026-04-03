@@ -103,6 +103,17 @@ router.post("/confirm", async (req, res) => {
 
     console.log("[Production Confirmation] Step 1: Validating production order exists in SAP...");
     
+    // Clean the order number before validation - remove special chars and leading zeros
+    let cleanedOrderId = productionOrderId.replace(/[$#*]/g, '').trim();
+    cleanedOrderId = cleanedOrderId.replace(/^0+/, '') || '0';
+    
+    console.log("[Production Confirmation] Original order ID:", productionOrderId);
+    console.log("[Production Confirmation] Cleaned order ID:", cleanedOrderId);
+    
+    // Pad to 12 digits for SAP query
+    const paddedOrderId = cleanedOrderId.padStart(12, '0');
+    console.log("[Production Confirmation] Padded order ID for query:", paddedOrderId);
+    
     // First, verify the production order exists
     try {
       const orderCheck = await executeSapFunction(
@@ -115,7 +126,7 @@ router.post("/confirm", async (req, res) => {
             { FIELDNAME: 'WERKS' },
             { FIELDNAME: 'AUART' }
           ],
-          OPTIONS: [{ TEXT: `AUFNR = '${productionOrderId.padStart(12, '0')}'` }],
+          OPTIONS: [{ TEXT: `AUFNR = '${paddedOrderId}'` }],
           ROWCOUNT: 1
         },
         {
@@ -126,8 +137,9 @@ router.post("/confirm", async (req, res) => {
       if (!orderCheck.DATA || orderCheck.DATA.length === 0) {
         return res.status(404).json({
           success: false,
-          error: `Production order ${productionOrderId} not found in SAP`,
-          message: "Please verify the production order number"
+          error: `Production order ${cleanedOrderId} not found in SAP`,
+          message: "Please verify the production order number",
+          searchedFor: paddedOrderId
         });
       }
 
@@ -145,7 +157,7 @@ router.post("/confirm", async (req, res) => {
     
     const inputData = {
       TIMETICKETS: [{
-        ORDERID: productionOrderId.padStart(12, '0'),
+        ORDERID: paddedOrderId,
         PLANT: plant,
         YIELD: parseFloat(yieldQuantity).toString(),
         SCRAP: parseFloat(scrapQuantity || 0).toString(),

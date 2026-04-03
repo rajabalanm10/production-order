@@ -2,33 +2,18 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
 import ProductionConfirmation from './pages/ProductionConfirmation';
 import GoodsReceipt from './pages/GoodsReceipt';
-import TestBapi from './pages/TestBapi';
 import ProductionOrders from './pages/ProductionOrders';
-import RealSapOrders from './pages/RealSapOrders';
 
 function Navigation() {
   const location = useLocation();
   
   return (
     <nav className="nav">
-      <h1>SAP MCP Integration - Manufacturing</h1>
+      <div className="nav-header">
+        <h1>Manufacturing Execution System</h1>
+        <p className="nav-subtitle">SAP Integration Platform</p>
+      </div>
       <ul className="nav-links">
-        <li>
-          <Link 
-            to="/" 
-            className={location.pathname === '/' ? 'active' : ''}
-          >
-            Production Confirmation
-          </Link>
-        </li>
-        <li>
-          <Link 
-            to="/goods-receipt" 
-            className={location.pathname === '/goods-receipt' ? 'active' : ''}
-          >
-            Goods Receipt
-          </Link>
-        </li>
         <li>
           <Link 
             to="/production-orders" 
@@ -39,24 +24,20 @@ function Navigation() {
         </li>
         <li>
           <Link 
-            to="/real-sap-orders" 
-            className={location.pathname === '/real-sap-orders' ? 'active' : ''}
-            style={{ 
-              background: location.pathname === '/real-sap-orders' ? '#2e7d32' : 'transparent',
-              color: location.pathname === '/real-sap-orders' ? 'white' : 'inherit'
-            }}
+            to="/" 
+            className={location.pathname === '/' ? 'active' : ''}
           >
-            🎯 Real SAP Orders
+            Order Confirmation
           </Link>
         </li>
-        {/* <li>
+        <li>
           <Link 
-            to="/test-bapi" 
-            className={location.pathname === '/test-bapi' ? 'active' : ''}
+            to="/goods-receipt" 
+            className={location.pathname === '/goods-receipt' ? 'active' : ''}
           >
-            Test BAPI
+            Goods Receipt
           </Link>
-        </li> */}
+        </li>
       </ul>
     </nav>
   );
@@ -71,8 +52,6 @@ function App() {
           <Route path="/" element={<ProductionConfirmation />} />
           <Route path="/goods-receipt" element={<GoodsReceipt />} />
           <Route path="/production-orders" element={<ProductionOrders />} />
-          <Route path="/real-sap-orders" element={<RealSapOrders />} />
-          <Route path="/test-bapi" element={<TestBapi />} />
         </Routes>
       </div>
     </Router>

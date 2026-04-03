@@ -61,10 +61,10 @@ function ProductionOrders() {
     
     setLoading(true);
     setError(null);
-    setFilteredOrders([]);
 
     try {
       console.log('[Production Orders] Making LIVE SAP call via backend...');
+      console.log('[Production Orders] Page:', currentPage, 'Limit:', recordsPerPage);
       
       const response = await fetch('/api/production-orders/search', {
         method: 'POST',
@@ -100,12 +100,11 @@ function ProductionOrders() {
       if (data.success) {
         console.log('[Production Orders] LIVE SAP call successful!');
         console.log(`[Production Orders] Source: ${data.source}`);
-        console.log(`[Production Orders] Found ${data.totalCount} total orders from SAP`);
+        console.log(`[Production Orders] Page ${currentPage}: Showing ${data.data?.length} of ${data.totalCount} total orders`);
         
         setOrders(data.data);
         setFilteredOrders(data.data);
         setTotalRecords(data.totalCount);
-        setCurrentPage(1); // Reset to first page on new search
       } else {
         setError(data.error || data.message || 'Failed to search production orders in SAP');
       }
@@ -130,17 +129,41 @@ function ProductionOrders() {
   };
 
   const handlePageChange = (newPage) => {
-    const totalPages = Math.ceil(filteredOrders.length / recordsPerPage);
+    const actualTotalRecords = totalRecords || filteredOrders.length;
+    const totalPages = Math.ceil(actualTotalRecords / recordsPerPage);
     if (newPage >= 1 && newPage <= totalPages) {
       setCurrentPage(newPage);
     }
   };
 
+  // Effect to trigger search when page changes
+  useEffect(() => {
+    if (filteredOrders.length > 0 || totalRecords > 0) {
+      // Only auto-search if we've already done an initial search
+      const fetchData = async () => {
+        await handleSearch();
+      };
+      fetchData();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPage]);
+
   const handleRecordsPerPageChange = (newLimit) => {
     setRecordsPerPage(newLimit);
     setCurrentPage(1);
-    // Don't auto-fetch - user can click search if they want fresh data
   };
+
+  // Effect to trigger search when records per page changes
+  useEffect(() => {
+    if (filteredOrders.length > 0 || totalRecords > 0) {
+      // Only auto-search if we've already done an initial search
+      const fetchData = async () => {
+        await handleSearch();
+      };
+      fetchData();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recordsPerPage]);
 
   const handleOrderDetails = (order) => {
     setSelectedOrder(order);
@@ -152,6 +175,7 @@ function ProductionOrders() {
   };
 
   const getStatusColor = (status) => {
+    if (!status) return '#999'; // Gray for no status
     switch (status) {
       case 'COMPLETED': return '#4caf50';
       case 'RELEASED': return '#2196f3';
@@ -161,28 +185,18 @@ function ProductionOrders() {
     }
   };
 
-  // Calculate pagination
-  const totalPages = Math.ceil(totalRecords / recordsPerPage);
+  // Calculate pagination - no slicing, show all data from current page
+  const actualTotalRecords = totalRecords || filteredOrders.length;
+  const totalPages = Math.ceil(actualTotalRecords / recordsPerPage);
   const startIndex = (currentPage - 1) * recordsPerPage;
   const endIndex = startIndex + recordsPerPage;
-  const paginatedOrders = filteredOrders.slice(startIndex, endIndex);
+  const paginatedOrders = filteredOrders; // Show all data from backend (already paginated)
 
   return (
     <div className="page">
-      <h2>Production Orders (Live SAP Integration)</h2>
-      
-      <div style={{ 
-        background: '#e3f2fd', 
-        padding: '1rem', 
-        borderRadius: '4px', 
-        marginBottom: '2rem',
-        border: '1px solid #2196f3'
-      }}>
-        <h3 style={{ margin: '0 0 0.5rem 0', color: '#1976d2' }}>🔴 LIVE SAP Integration</h3>
-        <p style={{ margin: 0, color: '#666' }}>
-          Every search makes a REAL-TIME call to your SAP system via Kiro MCP bridge.
-          Results are fetched directly from SAP AUFK table - no cached data.
-        </p>
+      <div className="page-header">
+        <h2>Production Orders</h2>
+        <p className="page-description">Search and manage production orders from SAP</p>
       </div>
       
       {/* Tab Navigation */}
@@ -220,8 +234,6 @@ function ProductionOrders() {
       {/* Search Tab */}
       {activeTab === 'search' && (
         <div>
-          <h3>Search Production Orders in SAP</h3>
-          
           <form onSubmit={handleSearch} style={{ marginBottom: '2rem' }}>
             <div className="form-row">
               <div className="form-group">
@@ -267,7 +279,7 @@ function ProductionOrders() {
 
             <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
               <button type="submit" className="btn btn-primary" disabled={loading}>
-                {loading ? '🔄 Calling SAP...' : '🔴 Search SAP (Live Call)'}
+                {loading ? 'Searching...' : 'Search Orders'}
               </button>
               
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -300,18 +312,18 @@ function ProductionOrders() {
                 marginBottom: '1rem',
                 padding: '1rem',
                 background: '#f9f9f9',
-                borderRadius: '4px',
-                border: '1px solid #ddd'
+                borderRadius: '8px',
+                border: '1px solid #e0e0e0'
               }}>
                 <div>
-                  <h3 style={{ margin: 0, color: '#1976d2' }}>Production Orders from SAP</h3>
-                  <div style={{ marginTop: '0.25rem', color: '#666', fontSize: '0.9rem' }}>
-                    <strong style={{ color: '#1976d2', fontSize: '1.1rem' }}>{totalRecords || filteredOrders.length}</strong> total records • LIVE SAP via MCP • RFC_READ_TABLE
+                  <h3 style={{ margin: 0, color: '#1976d2', fontSize: '1.3rem' }}>Search Results</h3>
+                  <div style={{ marginTop: '0.5rem', color: '#666', fontSize: '0.95rem' }}>
+                    <strong style={{ color: '#1976d2', fontSize: '1.1rem' }}>{actualTotalRecords}</strong> production orders found
                   </div>
                 </div>
                 <div style={{ textAlign: 'right' }}>
                   <div style={{ fontSize: '1rem', color: '#1976d2', fontWeight: 'bold' }}>
-                    Showing {startIndex + 1}-{Math.min(endIndex, totalRecords || filteredOrders.length)} of {totalRecords || filteredOrders.length}
+                    Showing {startIndex + 1}-{Math.min(endIndex, actualTotalRecords)} of {actualTotalRecords}
                   </div>
                   <div style={{ fontSize: '0.8rem', color: '#999', marginTop: '0.25rem' }}>
                     Page {currentPage} of {totalPages}
@@ -389,7 +401,7 @@ function ProductionOrders() {
                             background: `${getStatusColor(order.STATUS)}20`,
                             fontSize: '0.8rem'
                           }}>
-                            {order.STATUS}
+                            {order.STATUS || 'N/A'}
                           </span>
                         </td>
                         <td style={{ padding: '0.75rem' }}>
@@ -422,7 +434,7 @@ function ProductionOrders() {
                   borderRadius: '4px'
                 }}>
                   <div style={{ color: '#666', fontSize: '0.9rem' }}>
-                    Showing <strong>{startIndex + 1}</strong> to <strong>{Math.min(endIndex, totalRecords || filteredOrders.length)}</strong> of <strong>{totalRecords || filteredOrders.length}</strong> total records
+                    Showing <strong>{startIndex + 1}</strong> to <strong>{Math.min(endIndex, actualTotalRecords)}</strong> of <strong>{actualTotalRecords}</strong> total records
                   </div>
                   
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -538,8 +550,7 @@ function ProductionOrders() {
           {loading && (
             <div className="loading">
               <div className="spinner"></div>
-              <p>🔴 Calling SAP system in real-time...</p>
-              <p style={{ fontSize: '0.9rem', color: '#666' }}>This may take a few seconds</p>
+              <p>Searching production orders...</p>
             </div>
           )}
 
@@ -552,8 +563,8 @@ function ProductionOrders() {
 
           {/* No Results */}
           {!loading && filteredOrders.length === 0 && !error && (
-            <div className="alert" style={{ background: '#f0f0f0', color: '#666' }}>
-              Click "Search SAP (Live Call)" to fetch production orders from your SAP system in real-time.
+            <div className="alert" style={{ background: '#f5f5f5', color: '#666', border: '1px solid #e0e0e0' }}>
+              Click "Search Orders" to view production orders from SAP
             </div>
           )}
         </div>
@@ -562,11 +573,9 @@ function ProductionOrders() {
       {/* Confirmations Tab */}
       {activeTab === 'confirmations' && (
         <div>
-          <h3>My Production Order Confirmations</h3>
-          
           {confirmations.length === 0 ? (
-            <div className="alert" style={{ background: '#f0f0f0', color: '#666', padding: '1rem' }}>
-              No confirmations found. Create some confirmations using the "Production Confirmation" page.
+            <div className="alert" style={{ background: '#f5f5f5', color: '#666', padding: '1.5rem', border: '1px solid #e0e0e0' }}>
+              No confirmations found. Create confirmations using the "Order Confirmation" page.
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
@@ -734,8 +743,13 @@ function ProductionOrders() {
                     borderRadius: '12px',
                     background: `${getStatusColor(selectedOrder.STATUS)}20`
                   }}>
-                    {selectedOrder.STATUS}
+                    {selectedOrder.STATUS || 'N/A'}
                   </span>
+                  {selectedOrder.SYSTEM_STATUS && (
+                    <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '0.25rem' }}>
+                      System: {selectedOrder.SYSTEM_STATUS}
+                    </div>
+                  )}
                 </div>
               </div>
               <div>
@@ -746,17 +760,18 @@ function ProductionOrders() {
                 <strong>Created By:</strong>
                 <div style={{ marginBottom: '1rem' }}>{selectedOrder.CREATED_BY}</div>
               </div>
-              <div style={{ gridColumn: '1 / -1' }}>
-                <strong>Source:</strong>
-                <div style={{ marginBottom: '1rem' }}>
+              <div style={{ gridColumn: '1 / -1', paddingTop: '1rem', borderTop: '1px solid #e0e0e0' }}>
+                <strong>Data Source:</strong>
+                <div style={{ marginTop: '0.5rem' }}>
                   <span style={{ 
-                    padding: '0.25rem 0.5rem',
-                    borderRadius: '12px',
+                    padding: '0.4rem 0.8rem',
+                    borderRadius: '6px',
                     background: '#e3f2fd',
                     color: '#1976d2',
-                    fontSize: '0.9rem'
+                    fontSize: '0.9rem',
+                    fontWeight: '500'
                   }}>
-                    🔴 LIVE SAP - RFC_READ_TABLE (AUFK + AFPO)
+                    SAP ERP System
                   </span>
                 </div>
               </div>
