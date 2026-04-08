@@ -17,11 +17,11 @@ connect().catch(err => {
 
 /**
  * GET /api/production-orders/confirmations
- * Get all production order confirmations from SAP via MCP client
+ * Get all production order confirmations from SAP via MCP client using BAPI
  */
 router.get("/confirmations", async (req, res) => {
   try {
-    console.log("[Production Orders] Getting confirmations from SAP...");
+    console.log("[Production Orders] Getting confirmations from SAP using BAPI_PRODORDCONF_GETLIST...");
 
     if (!isConnected()) {
       console.log('[Production Orders] Not connected, attempting connection...');
@@ -36,38 +36,83 @@ router.get("/confirmations", async (req, res) => {
       }
     }
 
-    // Call SAP to get confirmations from AFRU table (Production order confirmations)
+    // Use BAPI_PRODORDCONF_GETLIST to get all production order confirmations
+    // This BAPI can fetch confirmations by order number range or confirmation number range
     const result = await executeSapFunction(
-      'RFC_READ_TABLE',
+      'BAPI_PRODORDCONF_GETLIST',
       {
-        QUERY_TABLE: 'AFRU',
-        DELIMITER: '|',
-        FIELDS: [
-          { FIELDNAME: 'RUECK' },  // Confirmation number
-          { FIELDNAME: 'AUFNR' },  // Order number
-          { FIELDNAME: 'WERKS' },  // Plant
-          { FIELDNAME: 'LMNGA' },  // Yield quantity
-          { FIELDNAME: 'XMNGA' },  // Scrap quantity
-          { FIELDNAME: 'BUDAT' }   // Posting date
-        ],
-        OPTIONS: [{ TEXT: "WERKS IN ('0001', '0002')" }],
-        ROWCOUNT: 100
+        // Leave empty to get all confirmations, or specify ranges
+        // CONFIRMATION_FROM: '',
+        // CONFIRMATION_TO: '',
+        // ORDERID_FROM: '',
+        // ORDERID_TO: ''
       },
       {
-        DATA: [{ WA: 'string' }]
+        CONFIRMATIONS: [{
+          CONF_NO: 'string',
+          CONF_CNT: 'string',
+          ORDERID: 'string',
+          OPERATION: 'string',
+          PLANT: 'string',
+          WORK_CNTR: 'string',
+          YIELD: 'string',
+          SCRAP: 'string',
+          POSTG_DATE: 'string',
+          CONF_TEXT: 'string',
+          FIN_CONF: 'string'
+        }],
+        RETURN: [{
+          TYPE: 'string',
+          MESSAGE: 'string'
+        }]
       }
     );
 
-    const confirmations = parseConfirmationData(result);
+    console.log(`[Production Orders] BAPI response received`);
+    
+    // Check for errors
+    if (result.RETURN && Array.isArray(result.RETURN)) {
+      for (const msg of result.RETURN) {
+        if (msg.TYPE === 'E' || msg.TYPE === 'A') {
+          console.error(`[Production Orders] BAPI Error: ${msg.MESSAGE}`);
+          return res.status(500).json({
+            success: false,
+            error: msg.MESSAGE || 'Failed to fetch confirmations',
+            sapResponse: result
+          });
+        }
+      }
+    }
+
+    // Parse confirmations from BAPI response
+    const confirmations = result.CONFIRMATIONS || [];
     
     console.log(`[Production Orders] Found ${confirmations.length} confirmations from SAP`);
 
+    // Transform BAPI response to match frontend expectations
+    const transformedConfirmations = confirmations.map(conf => ({
+      confirmationId: conf.CONF_NO || '',
+      confirmationCounter: conf.CONF_CNT || '',
+      productionOrderId: conf.ORDERID || '',
+      operation: conf.OPERATION || '',
+      plant: conf.PLANT || '',
+      workCenter: conf.WORK_CNTR || '',
+      yieldQuantity: conf.YIELD || '0',
+      scrapQuantity: conf.SCRAP || '0',
+      postingDate: conf.POSTG_DATE || '',
+      confirmationText: conf.CONF_TEXT || '',
+      finalConfirmation: conf.FIN_CONF === 'X' ? 'Yes' : 'No',
+      type: 'CONFIRMATION',
+      timestamp: conf.POSTG_DATE || new Date().toISOString()
+    }));
+
     res.json({
       success: true,
-      count: confirmations.length,
-      data: confirmations,
-      source: "LIVE_SAP_VIA_MCP",
-      message: `Found ${confirmations.length} production order confirmations`,
+      count: transformedConfirmations.length,
+      data: transformedConfirmations,
+      source: "LIVE_SAP_VIA_BAPI",
+      bapi: "BAPI_PRODORDCONF_GETLIST",
+      message: `Found ${transformedConfirmations.length} production order confirmations`,
       timestamp: new Date().toISOString(),
       liveSapCall: true
     });
@@ -104,11 +149,25 @@ router.post("/search", async (req, res) => {
       }
     }
 
-    // Build query options - only add plant filter if provided
+    // Build query options for SAP
     const queryOptions = [];
+    
+    // Always filter for production orders only (AUTYP = 10)
+    queryOptions.push({ TEXT: `AUTYP = '10'` });
+    
+    // Add plant filter if provided
     if (plant && plant.trim() !== '') {
-      queryOptions.push({ TEXT: `WERKS = '${plant}'` });
+      queryOptions.push({ TEXT: `WERKS = '${plant.trim()}'` });
+      console.log(`[Production Orders] Filtering by plant: ${plant}`);
     }
+    
+    console.log(`[Production Orders] Query filters:`, queryOptions);
+    
+    // Fetch a smaller number of records to avoid timeout
+    // If no plant filter, limit to 100 records. With plant filter, allow 300.
+    const rowCount = (plant && plant.trim() !== '') ? 300 : 100;
+    
+    console.log(`[Production Orders] Fetching up to ${rowCount} records from AUFK...`);
     
     const headerResult = await executeSapFunction(
       'RFC_READ_TABLE',
@@ -117,20 +176,24 @@ router.post("/search", async (req, res) => {
         DELIMITER: '|',
         FIELDS: [
           { FIELDNAME: 'AUFNR' },  // Order number
+          { FIELDNAME: 'AUTYP' },  // Order category (10=Production, 30=Maintenance, etc.)
           { FIELDNAME: 'WERKS' },  // Plant
           { FIELDNAME: 'AUART' },  // Order type
           { FIELDNAME: 'ERDAT' },  // Created date
-          { FIELDNAME: 'ERNAM' }   // Created by
+          { FIELDNAME: 'ERNAM' },  // Created by
+          { FIELDNAME: 'IDAT1' },  // Release date (if not empty, order is released)
+          { FIELDNAME: 'IDAT2' },  // Completed date
+          { FIELDNAME: 'IDAT3' }   // Closed date
         ],
-        ...(queryOptions.length > 0 ? { OPTIONS: queryOptions } : {}),
-        ROWCOUNT: 9999  // Fetch all available records
+        OPTIONS: queryOptions,
+        ROWCOUNT: rowCount
       },
       {
         DATA: [{ WA: 'string' }]
       }
     );
 
-    console.log(`[Production Orders] Retrieved ${headerResult.DATA?.length || 0} records from SAP`);
+    console.log(`[Production Orders] Retrieved ${headerResult.DATA?.length || 0} records from SAP AUFK table`);
 
     // Check if we got data
     if (!headerResult.DATA || !Array.isArray(headerResult.DATA)) {
@@ -139,76 +202,40 @@ router.post("/search", async (req, res) => {
         success: true,
         data: [],
         totalCount: 0,
-        message: "No production orders found"
-      });
-    }
-
-    // Parse the data
-    const allOrders = parseSapTableData(headerResult);
-    console.log(`[Production Orders] Parsed ${allOrders.length} production orders`);
-
-    // Always fetch real status from JEST, but do it smartly based on dataset size
-    let orders = [];
-    
-    if (allOrders.length > 100) {
-      // Large dataset - fetch status only for current page to avoid timeout
-      console.log(`[Production Orders] Large dataset detected - fetching status for current page only`);
-      
-      // First, apply pagination to get current page orders
-      const startIndex = (page - 1) * limit;
-      const endIndex = startIndex + limit;
-      const currentPageOrders = allOrders.slice(startIndex, endIndex);
-      
-      console.log(`[Production Orders] Fetching status for ${currentPageOrders.length} orders`);
-      
-      // Fetch real status for current page orders only
-      orders = await fetchStatusForOrders(currentPageOrders);
-      
-      // Apply status filter if provided
-      if (status && status.trim() !== '') {
-        orders = orders.filter(order => order.STATUS === status);
-      }
-      
-      // For large datasets with status filter, we can't know exact total without fetching all
-      const totalRecords = status ? orders.length : allOrders.length;
-      const totalPages = Math.ceil(totalRecords / limit);
-      
-      res.json({
-        success: true,
-        source: "LIVE_SAP_VIA_MCP",
-        selectedBAPI: "RFC_READ_TABLE + JEST",
-        searchCriteria: { plant, material, status },
         pagination: {
           page: parseInt(page),
           limit: parseInt(limit),
-          totalRecords: totalRecords,
-          totalPages: totalPages,
-          hasNextPage: page < totalPages,
-          hasPrevPage: page > 1,
-          note: status ? "Status filtering on large datasets - showing current page results" : undefined
+          totalRecords: 0,
+          totalPages: 0,
+          hasNextPage: false,
+          hasPrevPage: false
         },
-        count: orders.length,
-        totalCount: totalRecords,
-        data: orders,
-        message: `Found ${orders.length} orders on page ${page}`,
-        timestamp: new Date().toISOString()
+        message: "No production orders found",
+        source: "SAP_ERP"
       });
-      return;
-    } else {
-      // Small dataset - fetch all statuses at once
-      console.log(`[Production Orders] Fetching all statuses from SAP`);
-      orders = await fetchStatusForOrders(allOrders);
     }
 
-    // Apply filters
-    if (material) {
-      orders = orders.filter(order => 
-        order.MATERIAL && order.MATERIAL.toLowerCase().includes(material.toLowerCase())
-      );
+    // Parse the data - status is determined from IDAT fields
+    const allOrders = parseSapTableData(headerResult);
+    console.log(`[Production Orders] Parsed ${allOrders.length} production orders from AUFK`);
+
+    // Log sample of first few orders to verify data
+    if (allOrders.length > 0) {
+      console.log('[Production Orders] Sample orders:', allOrders.slice(0, 2).map(o => ({
+        order: o.PRODUCTION_ORDER,
+        plant: o.PLANT,
+        type: o.ORDER_TYPE,
+        status: o.STATUS,
+        releaseDate: o.RELEASE_DATE
+      })));
     }
 
-    if (status) {
+    // Apply status filter if provided
+    let orders = allOrders;
+    if (status && status.trim() !== '') {
+      console.log(`[Production Orders] Filtering by status: ${status}`);
       orders = orders.filter(order => order.STATUS === status);
+      console.log(`[Production Orders] After status filter: ${orders.length} orders`);
     }
 
     // Apply pagination on the backend
@@ -218,12 +245,22 @@ router.post("/search", async (req, res) => {
     const endIndex = startIndex + limit;
     const paginatedOrders = orders.slice(startIndex, endIndex);
 
-    console.log(`[Production Orders] Returning ${paginatedOrders.length} orders for page ${page}`);
+    console.log(`[Production Orders] Returning ${paginatedOrders.length} orders for page ${page} (total: ${totalRecords})`);
+    
+    // Check if we hit the row limit
+    const hitLimit = headerResult.DATA.length >= rowCount;
+    const warningMessage = hitLimit 
+      ? `Showing first ${rowCount} records. Please use plant filter to see more specific results.`
+      : null;
+
+    if (warningMessage) {
+      console.warn(`[Production Orders] ${warningMessage}`);
+    }
 
     res.json({
       success: true,
       source: "SAP_ERP",
-      searchCriteria: { plant, material, status },
+      searchCriteria: { plant, status },
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
@@ -236,6 +273,7 @@ router.post("/search", async (req, res) => {
       totalCount: totalRecords,
       data: paginatedOrders,
       message: `Found ${totalRecords} production orders`,
+      warning: warningMessage,
       timestamp: new Date().toISOString()
     });
 
@@ -262,50 +300,276 @@ router.get("/:orderId", async (req, res) => {
     console.log("[Production Orders] Order details request:", orderId);
 
     if (!isConnected()) {
-      console.log('[Production Orders] Not connected, attempting connection...');
+      console.log('[Production Orders] Connecting to SAP...');
       try {
         await connect();
       } catch (error) {
         return res.status(503).json({
           success: false,
-          error: "Failed to connect to MCP server",
+          error: "Failed to connect to SAP system",
           message: error.message
         });
       }
     }
 
-    // Call SAP via MCP client
-    const result = await executeSapFunction(
-      'BAPI_PRODORD_GET_DETAIL',
+    // Fetch order header from AUFK
+    const headerResult = await executeSapFunction(
+      'RFC_READ_TABLE',
       {
-        NUMBER: orderId
+        QUERY_TABLE: 'AUFK',
+        DELIMITER: '|',
+        FIELDS: [
+          { FIELDNAME: 'AUFNR' },  // Order number
+          { FIELDNAME: 'WERKS' },  // Plant
+          { FIELDNAME: 'AUART' },  // Order type
+          { FIELDNAME: 'ERDAT' },  // Created date
+          { FIELDNAME: 'ERNAM' },  // Created by
+          { FIELDNAME: 'AEDAT' },  // Changed date
+          { FIELDNAME: 'AENAM' }   // Changed by
+        ],
+        OPTIONS: [{ TEXT: `AUFNR = '${orderId.padStart(12, '0')}'` }],
+        ROWCOUNT: 1
       },
       {
-        RETURN: { TYPE: 'string', MESSAGE: 'string' },
-        ORDERKEY: { ORDER_NUMBER: 'string' },
-        HEADER: {
-          MATERIAL: 'string',
-          PLANT: 'string',
-          ORDER_QUANTITY: 'string'
-        }
+        DATA: [{ WA: 'string' }]
       }
     );
 
-    if (result.RETURN && result.RETURN.TYPE === 'E') {
-      throw new Error(result.RETURN.MESSAGE || 'SAP returned an error');
+    if (!headerResult.DATA || headerResult.DATA.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: `Production order ${orderId} not found`
+      });
     }
 
-    console.log(`[Production Orders] SUCCESS: Retrieved order ${orderId}`);
+    // Parse header data
+    const headerFields = headerResult.DATA[0].WA.split('|');
+    const orderData = {
+      PRODUCTION_ORDER: headerFields[0]?.trim().replace(/[$#*]/g, ''),
+      PLANT: headerFields[1]?.trim() || '',
+      ORDER_TYPE: headerFields[2]?.trim() || '',
+      CREATED_DATE: headerFields[3]?.trim() || '',
+      CREATED_BY: headerFields[4]?.trim() || '',
+      CHANGED_DATE: headerFields[5]?.trim() || '',
+      CHANGED_BY: headerFields[6]?.trim() || ''
+    };
+
+    // Fetch order item details from AFPO
+    try {
+      const itemResult = await executeSapFunction(
+        'RFC_READ_TABLE',
+        {
+          QUERY_TABLE: 'AFPO',
+          DELIMITER: '|',
+          FIELDS: [
+            { FIELDNAME: 'AUFNR' },  // Order number
+            { FIELDNAME: 'MATNR' },  // Material number
+            { FIELDNAME: 'PSMNG' },  // Target quantity
+            { FIELDNAME: 'MEINS' },  // Unit
+            { FIELDNAME: 'WEMNG' },  // Delivered quantity
+            { FIELDNAME: 'GLTRP' },  // Scheduled finish
+            { FIELDNAME: 'GSTRP' }   // Scheduled start
+          ],
+          OPTIONS: [{ TEXT: `AUFNR = '${orderId.padStart(12, '0')}'` }],
+          ROWCOUNT: 1
+        },
+        {
+          DATA: [{ WA: 'string' }]
+        }
+      );
+
+      if (itemResult.DATA && itemResult.DATA.length > 0) {
+        const itemFields = itemResult.DATA[0].WA.split('|');
+        orderData.MATERIAL = itemFields[1]?.trim().replace(/^0+/, '') || '';
+        orderData.TARGET_QUANTITY = itemFields[2]?.trim() || '0';
+        orderData.UNIT = itemFields[3]?.trim() || '';
+        orderData.DELIVERED_QUANTITY = itemFields[4]?.trim() || '0';
+        orderData.SCHEDULED_FINISH = itemFields[5]?.trim() || '';
+        orderData.SCHEDULED_START = itemFields[6]?.trim() || '';
+      }
+    } catch (afpoError) {
+      console.log('[Production Orders] Could not fetch AFPO data:', afpoError.message);
+    }
+
+    // Fetch material description from MAKT if material exists
+    if (orderData.MATERIAL) {
+      try {
+        const materialResult = await executeSapFunction(
+          'RFC_READ_TABLE',
+          {
+            QUERY_TABLE: 'MAKT',
+            DELIMITER: '|',
+            FIELDS: [
+              { FIELDNAME: 'MATNR' },  // Material number
+              { FIELDNAME: 'MAKTX' }   // Material description
+            ],
+            OPTIONS: [{ TEXT: `MATNR = '${orderData.MATERIAL.padStart(18, '0')}'` }],
+            ROWCOUNT: 1
+          },
+          {
+            DATA: [{ WA: 'string' }]
+          }
+        );
+
+        if (materialResult.DATA && materialResult.DATA.length > 0) {
+          const matFields = materialResult.DATA[0].WA.split('|');
+          orderData.MATERIAL_DESC = matFields[1]?.trim() || '';
+        }
+      } catch (matError) {
+        console.log('[Production Orders] Could not fetch material description:', matError.message);
+      }
+    }
+
+    // Fetch confirmation data from AFRU
+    try {
+      const confirmResult = await executeSapFunction(
+        'RFC_READ_TABLE',
+        {
+          QUERY_TABLE: 'AFRU',
+          DELIMITER: '|',
+          FIELDS: [
+            { FIELDNAME: 'AUFNR' },  // Order number
+            { FIELDNAME: 'LMNGA' },  // Yield quantity
+            { FIELDNAME: 'XMNGA' }   // Scrap quantity
+          ],
+          OPTIONS: [{ TEXT: `AUFNR = '${orderId.padStart(12, '0')}'` }],
+          ROWCOUNT: 100
+        },
+        {
+          DATA: [{ WA: 'string' }]
+        }
+      );
+
+      let totalConfirmed = 0;
+      let totalScrap = 0;
+
+      if (confirmResult.DATA && confirmResult.DATA.length > 0) {
+        for (const row of confirmResult.DATA) {
+          const fields = row.WA.split('|');
+          totalConfirmed += parseFloat(fields[1]?.trim() || '0');
+          totalScrap += parseFloat(fields[2]?.trim() || '0');
+        }
+      }
+
+      orderData.CONFIRMED_QUANTITY = totalConfirmed.toString();
+      orderData.SCRAP_QUANTITY = totalScrap.toString();
+    } catch (confError) {
+      console.log('[Production Orders] Could not fetch confirmation data:', confError.message);
+      orderData.CONFIRMED_QUANTITY = '0';
+      orderData.SCRAP_QUANTITY = '0';
+    }
+
+    // Fetch operations from AFVC (Order Operations)
+    // First get routing number from AFKO
+    try {
+      const afkoResult = await executeSapFunction(
+        'RFC_READ_TABLE',
+        {
+          QUERY_TABLE: 'AFKO',
+          DELIMITER: '|',
+          FIELDS: [
+            { FIELDNAME: 'AUFNR' },  // Order number
+            { FIELDNAME: 'AUFPL' }   // Routing number
+          ],
+          OPTIONS: [{ TEXT: `AUFNR = '${orderId.padStart(12, '0')}'` }],
+          ROWCOUNT: 1
+        },
+        {
+          DATA: [{ WA: 'string' }]
+        }
+      );
+
+      if (afkoResult.DATA && afkoResult.DATA.length > 0) {
+        const afkoFields = afkoResult.DATA[0].WA.split('|');
+        const routingNumber = afkoFields[1]?.trim() || '';
+        
+        if (routingNumber) {
+          // Now fetch operations using the routing number
+          const operationsResult = await executeSapFunction(
+            'RFC_READ_TABLE',
+            {
+              QUERY_TABLE: 'AFVC',
+              DELIMITER: '|',
+              FIELDS: [
+                { FIELDNAME: 'AUFPL' },  // Routing number
+                { FIELDNAME: 'VORNR' },  // Operation number
+                { FIELDNAME: 'ARBPL' },  // Work center
+                { FIELDNAME: 'LTXA1' }   // Operation description
+              ],
+              OPTIONS: [{ TEXT: `AUFPL = '${routingNumber}'` }],
+              ROWCOUNT: 10
+            },
+            {
+              DATA: [{ WA: 'string' }]
+            }
+          );
+
+          if (operationsResult.DATA && operationsResult.DATA.length > 0) {
+            const operations = [];
+            for (const row of operationsResult.DATA) {
+              const fields = row.WA.split('|');
+              operations.push({
+                OPERATION: fields[1]?.trim() || '',
+                WORK_CENTER: fields[2]?.trim() || '',
+                DESCRIPTION: fields[3]?.trim() || ''
+              });
+            }
+            orderData.OPERATIONS = operations;
+            
+            // Set first operation as default
+            if (operations.length > 0) {
+              orderData.DEFAULT_OPERATION = operations[0].OPERATION;
+              orderData.DEFAULT_WORK_CENTER = operations[0].WORK_CENTER;
+            }
+            
+            console.log(`[Production Orders] Found ${operations.length} operations for order ${orderId}`);
+          }
+        }
+      }
+    } catch (afvcError) {
+      console.log('[Production Orders] Could not fetch operations:', afvcError.message);
+      orderData.OPERATIONS = [];
+    }
+
+    // Fetch additional details from AFKO (order header additional data)
+    try {
+      const afkoResult = await executeSapFunction(
+        'RFC_READ_TABLE',
+        {
+          QUERY_TABLE: 'AFKO',
+          DELIMITER: '|',
+          FIELDS: [
+            { FIELDNAME: 'AUFNR' },  // Order number
+            { FIELDNAME: 'ARBPL' },  // Work center
+            { FIELDNAME: 'FEVOR' },  // Production supervisor
+            { FIELDNAME: 'DISPO' },  // MRP controller
+            { FIELDNAME: 'PRIOK' }   // Priority
+          ],
+          OPTIONS: [{ TEXT: `AUFNR = '${orderId.padStart(12, '0')}'` }],
+          ROWCOUNT: 1
+        },
+        {
+          DATA: [{ WA: 'string' }]
+        }
+      );
+
+      if (afkoResult.DATA && afkoResult.DATA.length > 0) {
+        const afkoFields = afkoResult.DATA[0].WA.split('|');
+        orderData.WORK_CENTER = afkoFields[1]?.trim() || '';
+        orderData.PRODUCTION_SUPERVISOR = afkoFields[2]?.trim() || '';
+        orderData.MRP_CONTROLLER = afkoFields[3]?.trim() || '';
+        orderData.PRIORITY = afkoFields[4]?.trim() || '';
+      }
+    } catch (afkoError) {
+      console.log('[Production Orders] Could not fetch AFKO data:', afkoError.message);
+    }
+
+    console.log(`[Production Orders] Retrieved detailed information for order ${orderId}`);
 
     res.json({
       success: true,
-      source: "LIVE_SAP_VIA_MCP_CLIENT",
-      selectedBAPI: "BAPI_PRODORD_GET_DETAIL",
-      productionOrder: orderId,
-      data: result,
-      message: "Production order details retrieved from SAP",
-      timestamp: new Date().toISOString(),
-      liveSapCall: true
+      data: orderData,
+      message: "Order details retrieved successfully"
     });
 
   } catch (error) {
@@ -335,18 +599,47 @@ async function fetchStatusForOrders(orders) {
       return orders.map(order => ({
         ...order,
         STATUS: '',
-        SYSTEM_STATUS: '',
-        MATERIAL: '',
-        ORDER_QUANTITY: '0',
-        UNIT: '',
-        RECEIVED_QUANTITY: '0',
-        CONFIRMED_QUANTITY: '0',
-        PROGRESS_PERCENT: 0
+        SYSTEM_STATUS: ''
       }));
     }
 
-    // Build OR conditions for each order (max 50 at a time to avoid query size issues)
-    const batchSize = 50;
+    console.log(`[Status Fetch] Sample order numbers:`, orderNumbers.slice(0, 3));
+
+    // First, do a quick test to see if JEST table is accessible
+    console.log(`[Status Fetch] Testing JEST table access...`);
+    try {
+      const testQuery = await executeSapFunction(
+        'RFC_READ_TABLE',
+        {
+          QUERY_TABLE: 'JEST',
+          DELIMITER: '|',
+          FIELDS: [
+            { FIELDNAME: 'OBJNR' },
+            { FIELDNAME: 'STAT' }
+          ],
+          ROWCOUNT: 3
+        },
+        {
+          DATA: [{ WA: 'string' }]
+        }
+      );
+      
+      console.log(`[Status Fetch] JEST test query returned ${testQuery.DATA?.length || 0} rows`);
+      if (testQuery.DATA && testQuery.DATA.length > 0) {
+        console.log(`[Status Fetch] Sample JEST records:`, testQuery.DATA.map(r => r.WA));
+      }
+    } catch (testError) {
+      console.error(`[Status Fetch] JEST test query failed:`, testError.message);
+      // If JEST is not accessible, return orders without status
+      return orders.map(order => ({
+        ...order,
+        STATUS: '',
+        SYSTEM_STATUS: 'JEST_NOT_ACCESSIBLE'
+      }));
+    }
+
+    // Build OR conditions for each order (smaller batches to avoid query issues)
+    const batchSize = 10;  // Reduced from 50 to 10 for more reliable queries
     const statusMap = {};
     
     for (let i = 0; i < orderNumbers.length; i += batchSize) {
@@ -354,9 +647,13 @@ async function fetchStatusForOrders(orders) {
       
       // Build WHERE clause - SAP JEST table uses OBJNR format: OR + 12-digit padded order number
       const whereConditions = batch.map(orderNum => {
+        // Pad the order number to 12 digits
         const paddedNum = orderNum.padStart(12, '0');
         return `OBJNR = 'OR${paddedNum}'`;
       }).join(' OR ');
+      
+      console.log(`[Status Fetch] Batch ${Math.floor(i / batchSize) + 1}: Querying ${batch.length} orders`);
+      console.log(`[Status Fetch] Sample WHERE: ${whereConditions.substring(0, 100)}...`);
       
       try {
         const statusResult = await executeSapFunction(
@@ -370,15 +667,23 @@ async function fetchStatusForOrders(orders) {
               { FIELDNAME: 'INACT' }   // Inactive flag
             ],
             OPTIONS: [{ TEXT: whereConditions }],
-            ROWCOUNT: 500
+            ROWCOUNT: 200  // Reduced from 500
           },
           {
             DATA: [{ WA: 'string' }]
           }
         );
 
+        console.log(`[Status Fetch] Batch ${Math.floor(i / batchSize) + 1}: Received ${statusResult.DATA?.length || 0} status records`);
+        
+        // Log the raw response for debugging
+        if (i === 0 && statusResult.DATA && statusResult.DATA.length > 0) {
+          console.log(`[Status Fetch] First batch raw data sample:`, JSON.stringify(statusResult.DATA.slice(0, 2), null, 2));
+        }
+
         // Parse status data
         if (statusResult.DATA && Array.isArray(statusResult.DATA)) {
+          let activeCount = 0;
           for (const row of statusResult.DATA) {
             if (!row.WA) continue;
             
@@ -386,6 +691,11 @@ async function fetchStatusForOrders(orders) {
             const objnr = fields[0]?.trim() || '';
             const stat = fields[1]?.trim() || '';
             const inact = fields[2]?.trim() || '';
+            
+            // Log first few rows for debugging
+            if (activeCount < 3 && i === 0) {
+              console.log(`[Status Fetch] Row ${activeCount + 1}: OBJNR="${objnr}", STAT="${stat}", INACT="${inact}"`);
+            }
             
             // Extract order number from OBJNR (format: OR000000012345)
             const orderNum = objnr.replace(/^OR0*/, '');
@@ -396,21 +706,28 @@ async function fetchStatusForOrders(orders) {
                 statusMap[orderNum] = [];
               }
               statusMap[orderNum].push(stat);
+              activeCount++;
             }
           }
+          console.log(`[Status Fetch] Batch ${Math.floor(i / batchSize) + 1}: Found ${activeCount} active statuses`);
         }
       } catch (batchError) {
-        console.error(`[Status Fetch] Error in batch: ${batchError.message}`);
+        console.error(`[Status Fetch] Error in batch ${Math.floor(i / batchSize) + 1}:`, batchError.message);
       }
     }
 
-    console.log(`[Status Fetch] Retrieved status for ${Object.keys(statusMap).length} orders`);
-
-    // If we got no statuses at all, try a simpler query to test connectivity
-    if (Object.keys(statusMap).length === 0 && orderNumbers.length > 0) {
-      console.log(`[Status Fetch] No statuses found - testing JEST table access...`);
+    console.log(`[Status Fetch] Total: Retrieved status for ${Object.keys(statusMap).length} out of ${orderNumbers.length} orders`);
+    
+    // Log sample of status map
+    if (Object.keys(statusMap).length > 0) {
+      const sample = Object.entries(statusMap).slice(0, 3);
+      console.log(`[Status Fetch] Sample status map:`, sample);
+    } else {
+      console.log(`[Status Fetch] WARNING: No statuses found in JEST table`);
+      
+      // Try a simple test query to check JEST table access
+      console.log(`[Status Fetch] Testing JEST table access with simple query...`);
       try {
-        // Try querying JEST with just the first order to test connectivity
         const testResult = await executeSapFunction(
           'RFC_READ_TABLE',
           {
@@ -418,11 +735,9 @@ async function fetchStatusForOrders(orders) {
             DELIMITER: '|',
             FIELDS: [
               { FIELDNAME: 'OBJNR' },
-              { FIELDNAME: 'STAT' },
-              { FIELDNAME: 'INACT' }
+              { FIELDNAME: 'STAT' }
             ],
-            OPTIONS: [{ TEXT: `OBJNR LIKE 'OR%'` }],
-            ROWCOUNT: 10
+            ROWCOUNT: 5  // Just get 5 rows to test
           },
           {
             DATA: [{ WA: 'string' }]
@@ -430,15 +745,18 @@ async function fetchStatusForOrders(orders) {
         );
         
         console.log(`[Status Fetch] Test query returned ${testResult.DATA?.length || 0} rows`);
+        if (testResult.DATA && testResult.DATA.length > 0) {
+          console.log(`[Status Fetch] Sample JEST data:`, testResult.DATA.slice(0, 2).map(r => r.WA));
+        }
       } catch (testError) {
-        console.error(`[Status Fetch] Test query failed: ${testError.message}`);
+        console.error(`[Status Fetch] Test query failed:`, testError.message);
       }
     }
 
     // Map statuses to orders
     return orders.map(order => {
       const statuses = statusMap[order.PRODUCTION_ORDER] || [];
-      let status = '';  // Empty if no status found in SAP
+      let status = 'UNKNOWN';  // Default to UNKNOWN if no status found
       let systemStatus = statuses.join(',');
       
       // Determine status based on SAP status codes (only if statuses exist)
@@ -446,7 +764,7 @@ async function fetchStatusForOrders(orders) {
         if (statuses.includes('TECO') || statuses.includes('DLV')) {
           status = 'COMPLETED';
         } else if (statuses.includes('PCNF') || statuses.includes('CNF')) {
-          status = 'IN_PROGRESS';
+          status = 'IN PROGRESS';
         } else if (statuses.includes('REL')) {
           status = 'RELEASED';
         } else if (statuses.includes('CRTD')) {
@@ -455,33 +773,24 @@ async function fetchStatusForOrders(orders) {
           // Has status codes but none we recognize - show the raw codes
           status = statuses[0]; // Show first status code
         }
+      } else {
+        // No status found - log for debugging
+        console.log(`[Status Fetch] No status found for order: ${order.PRODUCTION_ORDER}`);
       }
 
       return {
         ...order,
         STATUS: status,
-        SYSTEM_STATUS: systemStatus,
-        MATERIAL: '',
-        ORDER_QUANTITY: '0',
-        UNIT: '',
-        RECEIVED_QUANTITY: '0',
-        CONFIRMED_QUANTITY: '0',
-        PROGRESS_PERCENT: 0
+        SYSTEM_STATUS: systemStatus || 'NO_STATUS_IN_JEST'
       };
     });
   } catch (error) {
-    console.error('[fetchStatusForOrders] Error:', error.message);
-    // Return orders with empty status on error (real data, not simulated)
+    console.error('[Status Fetch] Error:', error.message);
+    // Return orders with UNKNOWN status on error
     return orders.map(order => ({
       ...order,
-      STATUS: '',  // Empty status indicates error fetching from SAP
-      SYSTEM_STATUS: 'ERROR_FETCHING',
-      MATERIAL: '',
-      ORDER_QUANTITY: '0',
-      UNIT: '',
-      RECEIVED_QUANTITY: '0',
-      CONFIRMED_QUANTITY: '0',
-      PROGRESS_PERCENT: 0
+      STATUS: 'UNKNOWN',
+      SYSTEM_STATUS: 'ERROR_FETCHING'
     }));
   }
 }
@@ -490,99 +799,103 @@ async function fetchStatusForOrders(orders) {
  * Helper function to parse SAP RFC_READ_TABLE response from AUFK
  */
 function parseSapTableData(result) {
-  console.log('[parseSapTableData] Input result:', {
-    hasDATA: !!result.DATA,
-    isArray: Array.isArray(result.DATA),
-    length: result.DATA?.length,
-    firstRow: result.DATA?.[0]
-  });
+  console.log('[parseSapTableData] Processing SAP data...');
 
   if (!result.DATA || !Array.isArray(result.DATA)) {
-    console.log('[parseSapTableData] No DATA or not an array, returning empty');
+    console.log('[parseSapTableData] No DATA array found');
     return [];
   }
 
+  console.log(`[parseSapTableData] Raw data rows from SAP: ${result.DATA.length}`);
+
   const orders = [];
+  let skippedCount = 0;
+  let nonProductionCount = 0;
   
   for (const row of result.DATA) {
     if (!row.WA) {
-      console.log('[parseSapTableData] Row has no WA property:', row);
+      skippedCount++;
       continue;
     }
     
     const fields = row.WA.split('|');
     
-    // Debug: Log first few rows
-    if (orders.length < 3) {
-      console.log('[parseSapTableData] Row WA:', row.WA);
-      console.log('[parseSapTableData] Parsed fields:', fields);
+    // Log first few rows to see the data format
+    if (orders.length < 2) {
+      console.log(`[parseSapTableData] Sample row ${orders.length + 1}:`, row.WA);
+      console.log(`[parseSapTableData] Fields count: ${fields.length}`);
     }
     
     // Clean order number - SAP pads with special characters
-    // Remove leading/trailing spaces first, then remove special padding chars
     const rawOrderNumber = fields[0]?.trim() || '';
     
-    // SAP uses $ # * for padding - remove them but keep alphanumeric and hyphens
+    // SAP uses $ # * for padding - remove them
     let orderNumber = rawOrderNumber.replace(/[$#*]/g, '').trim();
     
-    // Remove leading zeros if present
-    orderNumber = orderNumber.replace(/^0+/, '') || '0';
-    
-    const plant = fields[1]?.trim() || '';
-    
-    // Skip if no valid order number
-    if (!orderNumber || orderNumber === '0') {
+    // Keep leading zeros - they might be significant
+    // Only skip if completely empty
+    if (!orderNumber) {
+      skippedCount++;
       continue;
+    }
+    
+    const autyp = fields[1]?.trim() || ''; // Order category
+    const plant = fields[2]?.trim() || '';
+    const orderType = fields[3]?.trim() || 'PP01';
+    const createdDate = fields[4]?.trim() || '';
+    const createdBy = fields[5]?.trim() || '';
+    const idat1 = fields[6]?.trim() || ''; // Release date
+    const idat2 = fields[7]?.trim() || ''; // Completed date
+    const idat3 = fields[8]?.trim() || ''; // Closed date
+    
+    // Filter: Only include production orders (AUTYP = 10)
+    // Skip maintenance orders (AUTYP = 30) and other order types
+    if (autyp !== '10') {
+      nonProductionCount++;
+      if (nonProductionCount <= 3) {
+        console.log(`[parseSapTableData] Skipping non-production order: ${orderNumber}, AUTYP: ${autyp}`);
+      }
+      continue;
+    }
+    
+    // Determine status based on IDAT fields (check in reverse order - most advanced status first)
+    // IDAT1 = Release date, IDAT2 = Completed date, IDAT3 = Closed date
+    let status = 'CREATED';
+    if (idat3 && idat3 !== '00000000') {
+      status = 'CLOSED';
+    } else if (idat2 && idat2 !== '00000000') {
+      status = 'COMPLETED';
+    } else if (idat1 && idat1 !== '00000000') {
+      status = 'RELEASED';
     }
     
     orders.push({
       PRODUCTION_ORDER: orderNumber,
+      ORDER_CATEGORY: autyp,
       PLANT: plant,
-      ORDER_TYPE: fields[2]?.trim() || 'PP01',
-      CREATED_DATE: fields[3]?.trim() || '',
-      CREATED_BY: fields[4]?.trim() || '',
+      ORDER_TYPE: orderType,
+      CREATED_DATE: createdDate,
+      CREATED_BY: createdBy,
+      STATUS: status,
+      RELEASE_DATE: idat1, // Store dates for reference
+      COMPLETED_DATE: idat2,
+      CLOSED_DATE: idat3,
       START_DATE: '',
       FINISH_DATE: '',
-      STATUS: 'CREATED',  // Will be updated from JEST
-      SOURCE: 'LIVE_SAP'
+      SOURCE: 'SAP'
     });
   }
 
-  console.log(`[parseSapTableData] Returning ${orders.length} orders`);
-  if (orders.length > 0) {
-    console.log('[parseSapTableData] Sample order:', orders[0]);
-  }
-  return orders;
-}
-
-/**
- * Helper function to parse AFRU (Production order confirmations) data
- */
-function parseConfirmationData(result) {
-  if (!result.DATA || !Array.isArray(result.DATA)) {
-    return [];
-  }
-
-  const confirmations = [];
+  console.log(`[parseSapTableData] Parsed ${orders.length} production orders (AUTYP=10)`);
+  console.log(`[parseSapTableData] Skipped ${nonProductionCount} non-production orders (AUTYP≠10)`);
+  console.log(`[parseSapTableData] Skipped ${skippedCount} empty rows`);
   
-  for (const row of result.DATA) {
-    if (!row.WA) continue;
-    
-    const fields = row.WA.split('|');
-    
-    confirmations.push({
-      confirmationId: fields[0]?.trim() || '',
-      productionOrderId: fields[1]?.trim() || '',
-      plant: fields[2]?.trim() || '',
-      yieldQuantity: fields[3]?.trim() || '0',
-      scrapQuantity: fields[4]?.trim() || '0',
-      postingDate: fields[5]?.trim() || '',
-      type: 'CONFIRMATION',
-      timestamp: fields[5]?.trim() || new Date().toISOString()
-    });
+  if (orders.length > 0) {
+    console.log(`[parseSapTableData] First order: ${orders[0].PRODUCTION_ORDER}, AUTYP: ${orders[0].ORDER_CATEGORY}, Plant: "${orders[0].PLANT}", Status: "${orders[0].STATUS}", IDAT1: "${orders[0].RELEASE_DATE}"`);
+    console.log(`[parseSapTableData] Last order: ${orders[orders.length - 1].PRODUCTION_ORDER}, Status: "${orders[orders.length - 1].STATUS}"`);
   }
-
-  return confirmations;
+  
+  return orders;
 }
 
 /**

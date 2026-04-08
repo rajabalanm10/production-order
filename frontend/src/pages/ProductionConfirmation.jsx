@@ -4,6 +4,7 @@ function ProductionConfirmation() {
   const [formData, setFormData] = useState({
     productionOrderId: '',
     plant: '',
+    operation: '0010',
     material: '',
     yieldQuantity: '',
     scrapQuantity: '',
@@ -43,17 +44,8 @@ function ProductionConfirmation() {
         setResult(data);
         console.log('[Production Confirmation] ✅ Posted to SAP successfully');
       } else {
-        // Show detailed error from SAP
-        let errorMsg = data.error || 'Failed to confirm production order';
-        
-        // Add helpful hints based on error type
-        if (errorMsg.includes('not released')) {
-          errorMsg += '\n\nThe production order must be released in SAP before it can be confirmed. Please release the order first.';
-        } else if (errorMsg.includes('work center') || errorMsg.includes('operation')) {
-          errorMsg += '\n\nWork center or operation information may be required. Please provide these details.';
-        }
-        
-        setError(errorMsg);
+        // Show SAP error message directly
+        setError(data.error || 'Failed to confirm production order');
       }
     } catch (err) {
       setError(err.message || 'Network error occurred');
@@ -66,6 +58,7 @@ function ProductionConfirmation() {
     setFormData({
       productionOrderId: '',
       plant: '',
+      operation: '0010',
       material: '',
       yieldQuantity: '',
       scrapQuantity: '',
@@ -94,7 +87,7 @@ function ProductionConfirmation() {
               value={formData.productionOrderId}
               onChange={handleChange}
               required
-              placeholder="Enter production order number"
+              placeholder="e.g., 000060005121"
             />
           </div>
 
@@ -107,7 +100,38 @@ function ProductionConfirmation() {
               value={formData.plant}
               onChange={handleChange}
               required
-              placeholder="Enter plant code"
+              placeholder="e.g., SL31"
+            />
+          </div>
+        </div>
+
+        <div className="form-row">
+          <div className="form-group">
+            <label htmlFor="operation">Operation *</label>
+            <input
+              type="text"
+              id="operation"
+              name="operation"
+              value={formData.operation}
+              onChange={handleChange}
+              required
+              placeholder="e.g., 0010"
+            />
+            <small style={{ color: '#666', fontSize: '0.85rem' }}>
+              Default: 0010 (first operation)
+            </small>
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="workCenter">Work Center *</label>
+            <input
+              type="text"
+              id="workCenter"
+              name="workCenter"
+              value={formData.workCenter}
+              onChange={handleChange}
+              required
+              placeholder="e.g., WORK_CTR_01"
             />
           </div>
         </div>
@@ -126,20 +150,6 @@ function ProductionConfirmation() {
           </div>
 
           <div className="form-group">
-            <label htmlFor="workCenter">Work Center</label>
-            <input
-              type="text"
-              id="workCenter"
-              name="workCenter"
-              value={formData.workCenter}
-              onChange={handleChange}
-              placeholder="Enter work center"
-            />
-          </div>
-        </div>
-
-        <div className="form-row">
-          <div className="form-group">
             <label htmlFor="yieldQuantity">Yield Quantity (Confirmed) *</label>
             <input
               type="number"
@@ -153,7 +163,9 @@ function ProductionConfirmation() {
               placeholder="Enter confirmed quantity"
             />
           </div>
+        </div>
 
+        <div className="form-row">
           <div className="form-group">
             <label htmlFor="scrapQuantity">Scrap Quantity</label>
             <input
@@ -164,23 +176,23 @@ function ProductionConfirmation() {
               onChange={handleChange}
               min="0"
               step="0.01"
-              placeholder="Enter scrap quantity"
+              placeholder="Enter scrap quantity (optional)"
             />
           </div>
-        </div>
 
-        <div className="form-group">
-          <label htmlFor="confirmationType">Confirmation Type *</label>
-          <select
-            id="confirmationType"
-            name="confirmationType"
-            value={formData.confirmationType}
-            onChange={handleChange}
-            required
-          >
-            <option value="P">Partial</option>
-            <option value="F">Final</option>
-          </select>
+          <div className="form-group">
+            <label htmlFor="confirmationType">Confirmation Type *</label>
+            <select
+              id="confirmationType"
+              name="confirmationType"
+              value={formData.confirmationType}
+              onChange={handleChange}
+              required
+            >
+              <option value="P">Partial</option>
+              <option value="F">Final</option>
+            </select>
+          </div>
         </div>
 
         <div>

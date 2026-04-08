@@ -4,7 +4,6 @@ function ProductionOrders() {
   const [activeTab, setActiveTab] = useState('search');
   const [searchForm, setSearchForm] = useState({
     plant: '',
-    material: '',
     status: ''
   });
   
@@ -13,6 +12,8 @@ function ProductionOrders() {
   const [filteredOrders, setFilteredOrders] = useState([]);
   const [confirmations, setConfirmations] = useState([]);
   const [selectedOrder, setSelectedOrder] = useState(null);
+  const [orderDetails, setOrderDetails] = useState(null);
+  const [loadingDetails, setLoadingDetails] = useState(false);
   const [error, setError] = useState(null);
   
   // Pagination state
@@ -73,7 +74,6 @@ function ProductionOrders() {
         },
         body: JSON.stringify({
           plant: searchForm.plant,
-          material: searchForm.material,
           status: searchForm.status,
           page: currentPage,
           limit: recordsPerPage
@@ -105,6 +105,11 @@ function ProductionOrders() {
         setOrders(data.data);
         setFilteredOrders(data.data);
         setTotalRecords(data.totalCount);
+        
+        // Show warning if we hit the record limit
+        if (data.warning) {
+          console.warn('[Production Orders] Warning:', data.warning);
+        }
       } else {
         setError(data.error || data.message || 'Failed to search production orders in SAP');
       }
@@ -165,13 +170,49 @@ function ProductionOrders() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recordsPerPage]);
 
-  const handleOrderDetails = (order) => {
+  const handleOrderDetails = async (order) => {
     setSelectedOrder(order);
+    setLoadingDetails(true);
+    setOrderDetails(null);
+    
+    try {
+      // Fetch detailed order information from backend
+      const response = await fetch(`/api/production-orders/${order.PRODUCTION_ORDER}`);
+      
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          setOrderDetails(data.data);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load order details:', err);
+    } finally {
+      setLoadingDetails(false);
+    }
   };
 
   const formatDate = (dateString) => {
     if (!dateString) return 'N/A';
-    return new Date(dateString).toLocaleDateString();
+    
+    // Handle SAP date format (YYYYMMDD)
+    if (dateString.length === 8 && !dateString.includes('-') && !dateString.includes('.')) {
+      const year = dateString.substring(0, 4);
+      const month = dateString.substring(4, 6);
+      const day = dateString.substring(6, 8);
+      return `${day}.${month}.${year}`;
+    }
+    
+    // Handle ISO date format or other formats
+    try {
+      const date = new Date(dateString);
+      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const year = date.getFullYear();
+      return `${day}.${month}.${year}`;
+    } catch (e) {
+      return dateString; // Return as-is if can't parse
+    }
   };
 
   const getStatusColor = (status) => {
@@ -179,8 +220,11 @@ function ProductionOrders() {
     switch (status) {
       case 'COMPLETED': return '#4caf50';
       case 'RELEASED': return '#2196f3';
-      case 'IN_PROGRESS': return '#ff9800';
+      case 'IN PROGRESS': return '#ff9800';
       case 'CREATED': return '#9e9e9e';
+      case 'CLOSED': return '#607d8b';
+      case 'DELETED': return '#f44336';
+      case 'UNKNOWN': return '#999';
       default: return '#666';
     }
   };
@@ -244,19 +288,7 @@ function ProductionOrders() {
                   name="plant"
                   value={searchForm.plant}
                   onChange={handleSearchChange}
-                  placeholder="e.g., 0001, 0002"
-                />
-              </div>
-
-              <div className="form-group">
-                <label htmlFor="material">Material (Optional)</label>
-                <input
-                  type="text"
-                  id="material"
-                  name="material"
-                  value={searchForm.material}
-                  onChange={handleSearchChange}
-                  placeholder="Leave empty to search all"
+                  placeholder="e.g., SL31, 0001"
                 />
               </div>
 
@@ -269,10 +301,10 @@ function ProductionOrders() {
                   onChange={handleSearchChange}
                 >
                   <option value="">All Statuses</option>
-                  <option value="CREATED">Created</option>
-                  <option value="RELEASED">Released</option>
-                  <option value="IN_PROGRESS">In Progress</option>
-                  <option value="COMPLETED">Completed</option>
+                  <option value="CREATED">CREATED</option>
+                  <option value="RELEASED">RELEASED</option>
+                  <option value="COMPLETED">COMPLETED</option>
+                  <option value="CLOSED">CLOSED</option>
                 </select>
               </div>
             </div>
@@ -305,6 +337,21 @@ function ProductionOrders() {
           {/* Results */}
           {filteredOrders.length > 0 && (
             <div className="result-section">
+              {/* Warning if hit record limit */}
+              {orders.length > 0 && (
+                <div style={{ marginBottom: '1rem' }}>
+                  <div className="alert" style={{ 
+                    background: '#fff3cd', 
+                    color: '#856404', 
+                    border: '1px solid #ffeaa7',
+                    padding: '1rem',
+                    borderRadius: '4px'
+                  }}>
+                    ℹ️ <strong>Tip:</strong> Showing first 100 records (300 with plant filter). Use <strong>Plant filter</strong> (e.g., "SL31") to see specific plant orders.
+                  </div>
+                </div>
+              )}
+              
               <div style={{ 
                 display: 'flex', 
                 justifyContent: 'space-between', 
@@ -341,10 +388,8 @@ function ProductionOrders() {
                     <tr style={{ background: '#1976d2', color: 'white' }}>
                       <th style={{ padding: '0.75rem', textAlign: 'left' }}>Order ID</th>
                       <th style={{ padding: '0.75rem', textAlign: 'left' }}>Plant</th>
-                      <th style={{ padding: '0.75rem', textAlign: 'left' }}>Material</th>
-                      <th style={{ padding: '0.75rem', textAlign: 'right' }}>Order Qty</th>
-                      <th style={{ padding: '0.75rem', textAlign: 'right' }}>Received Qty</th>
-                      <th style={{ padding: '0.75rem', textAlign: 'right' }}>Progress</th>
+                      <th style={{ padding: '0.75rem', textAlign: 'left' }}>Order Type</th>
+                      <th style={{ padding: '0.75rem', textAlign: 'left' }}>Created Date</th>
                       <th style={{ padding: '0.75rem', textAlign: 'left' }}>Status</th>
                       <th style={{ padding: '0.75rem', textAlign: 'left' }}>Actions</th>
                     </tr>
@@ -361,48 +406,24 @@ function ProductionOrders() {
                         <td style={{ padding: '0.75rem', fontWeight: 'bold', color: '#1976d2' }}>
                           {order.PRODUCTION_ORDER}
                         </td>
-                        <td style={{ padding: '0.75rem' }}>{order.PLANT}</td>
+                        <td style={{ padding: '0.75rem' }}>{order.PLANT || ''}</td>
+                        <td style={{ padding: '0.75rem' }}>{order.ORDER_TYPE}</td>
+                        <td style={{ padding: '0.75rem' }}>{formatDate(order.CREATED_DATE)}</td>
                         <td style={{ padding: '0.75rem' }}>
-                          {order.MATERIAL || 'N/A'}
-                        </td>
-                        <td style={{ padding: '0.75rem', textAlign: 'right' }}>
-                          {parseFloat(order.ORDER_QUANTITY || 0).toFixed(2)} {order.UNIT}
-                        </td>
-                        <td style={{ padding: '0.75rem', textAlign: 'right' }}>
-                          {parseFloat(order.RECEIVED_QUANTITY || 0).toFixed(2)} {order.UNIT}
-                        </td>
-                        <td style={{ padding: '0.75rem', textAlign: 'right' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <div style={{ 
-                              flex: 1, 
-                              height: '8px', 
-                              background: '#e0e0e0', 
-                              borderRadius: '4px',
-                              overflow: 'hidden'
+                          {order.STATUS ? (
+                            <span style={{ 
+                              color: getStatusColor(order.STATUS), 
+                              fontWeight: 'bold',
+                              padding: '0.25rem 0.5rem',
+                              borderRadius: '12px',
+                              background: `${getStatusColor(order.STATUS)}20`,
+                              fontSize: '0.8rem'
                             }}>
-                              <div style={{ 
-                                width: `${Math.min(order.PROGRESS_PERCENT || 0, 100)}%`, 
-                                height: '100%', 
-                                background: order.PROGRESS_PERCENT >= 100 ? '#4caf50' : '#2196f3',
-                                transition: 'width 0.3s'
-                              }} />
-                            </div>
-                            <span style={{ fontSize: '0.85rem', minWidth: '40px' }}>
-                              {order.PROGRESS_PERCENT || 0}%
+                              {order.STATUS}
                             </span>
-                          </div>
-                        </td>
-                        <td style={{ padding: '0.75rem' }}>
-                          <span style={{ 
-                            color: getStatusColor(order.STATUS), 
-                            fontWeight: 'bold',
-                            padding: '0.25rem 0.5rem',
-                            borderRadius: '12px',
-                            background: `${getStatusColor(order.STATUS)}20`,
-                            fontSize: '0.8rem'
-                          }}>
-                            {order.STATUS || 'N/A'}
-                          </span>
+                          ) : (
+                            <span style={{ color: '#999' }}>-</span>
+                          )}
                         </td>
                         <td style={{ padding: '0.75rem' }}>
                           <button
@@ -546,11 +567,24 @@ function ProductionOrders() {
             </div>
           )}
 
-          {/* Loading */}
+          {/* Loading Overlay */}
           {loading && (
-            <div className="loading">
-              <div className="spinner"></div>
-              <p>Searching production orders...</p>
+            <div style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: 'rgba(255, 255, 255, 0.95)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 9999
+            }}>
+              <div className="loading">
+                <div className="spinner"></div>
+                <p>Searching production orders...</p>
+              </div>
             </div>
           )}
 
@@ -657,10 +691,13 @@ function ProductionOrders() {
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
               <h3 style={{ color: '#1976d2', margin: 0 }}>
-                Order: {selectedOrder.PRODUCTION_ORDER}
+                Order Details: {selectedOrder.PRODUCTION_ORDER}
               </h3>
               <button
-                onClick={() => setSelectedOrder(null)}
+                onClick={() => {
+                  setSelectedOrder(null);
+                  setOrderDetails(null);
+                }}
                 style={{
                   background: 'none',
                   border: 'none',
@@ -673,113 +710,276 @@ function ProductionOrders() {
               </button>
             </div>
             
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-              <div>
-                <strong>Production Order:</strong>
-                <div style={{ marginBottom: '1rem', fontSize: '1.1rem', fontWeight: 'bold', color: '#1976d2' }}>
-                  {selectedOrder.PRODUCTION_ORDER}
-                </div>
+            {loadingDetails ? (
+              <div style={{ textAlign: 'center', padding: '2rem' }}>
+                <div className="spinner"></div>
+                <p>Loading order details...</p>
               </div>
-              <div>
-                <strong>Plant:</strong>
-                <div style={{ marginBottom: '1rem' }}>{selectedOrder.PLANT}</div>
-              </div>
-              <div>
-                <strong>Material:</strong>
-                <div style={{ marginBottom: '1rem' }}>{selectedOrder.MATERIAL || 'N/A'}</div>
-              </div>
-              <div>
-                <strong>Order Type:</strong>
-                <div style={{ marginBottom: '1rem' }}>{selectedOrder.ORDER_TYPE}</div>
-              </div>
-              <div>
-                <strong>Order Quantity:</strong>
-                <div style={{ marginBottom: '1rem', fontSize: '1.1rem', fontWeight: 'bold', color: '#1976d2' }}>
-                  {parseFloat(selectedOrder.ORDER_QUANTITY || 0).toFixed(2)} {selectedOrder.UNIT}
-                </div>
-              </div>
-              <div>
-                <strong>Received Quantity:</strong>
-                <div style={{ marginBottom: '1rem', fontSize: '1.1rem', fontWeight: 'bold', color: '#4caf50' }}>
-                  {parseFloat(selectedOrder.RECEIVED_QUANTITY || 0).toFixed(2)} {selectedOrder.UNIT}
-                </div>
-              </div>
-              <div>
-                <strong>Confirmed Quantity:</strong>
-                <div style={{ marginBottom: '1rem' }}>
-                  {parseFloat(selectedOrder.CONFIRMED_QUANTITY || 0).toFixed(3)} {selectedOrder.UNIT}
-                </div>
-              </div>
-              <div>
-                <strong>Progress:</strong>
-                <div style={{ marginBottom: '1rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <div style={{ 
-                      flex: 1, 
-                      height: '12px', 
-                      background: '#e0e0e0', 
-                      borderRadius: '6px',
-                      overflow: 'hidden'
-                    }}>
-                      <div style={{ 
-                        width: `${Math.min(selectedOrder.PROGRESS_PERCENT || 0, 100)}%`, 
-                        height: '100%', 
-                        background: selectedOrder.PROGRESS_PERCENT >= 100 ? '#4caf50' : '#2196f3'
-                      }} />
+            ) : (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                  <div>
+                    <strong>Production Order:</strong>
+                    <div style={{ marginBottom: '1rem', fontSize: '1.1rem', fontWeight: 'bold', color: '#1976d2' }}>
+                      {selectedOrder.PRODUCTION_ORDER}
                     </div>
-                    <span style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>
-                      {selectedOrder.PROGRESS_PERCENT || 0}%
+                  </div>
+                  <div>
+                    <strong>Plant:</strong>
+                    <div style={{ marginBottom: '1rem' }}>{selectedOrder.PLANT || '-'}</div>
+                  </div>
+                  <div>
+                    <strong>Order Type:</strong>
+                    <div style={{ marginBottom: '1rem' }}>{selectedOrder.ORDER_TYPE}</div>
+                  </div>
+                  <div>
+                    <strong>Created Date:</strong>
+                    <div style={{ marginBottom: '1rem' }}>{formatDate(selectedOrder.CREATED_DATE)}</div>
+                  </div>
+                  <div>
+                    <strong>Created By:</strong>
+                    <div style={{ marginBottom: '1rem' }}>{selectedOrder.CREATED_BY}</div>
+                  </div>
+                  <div>
+                    <strong>Status:</strong>
+                    <div style={{ marginBottom: '1rem' }}>
+                      {selectedOrder.STATUS ? (
+                        <>
+                          <span style={{ 
+                            color: getStatusColor(selectedOrder.STATUS),
+                            fontWeight: 'bold',
+                            padding: '0.25rem 0.5rem',
+                            borderRadius: '12px',
+                            background: `${getStatusColor(selectedOrder.STATUS)}20`
+                          }}>
+                            {selectedOrder.STATUS}
+                          </span>
+                          {selectedOrder.SYSTEM_STATUS && (
+                            <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '0.25rem' }}>
+                              System: {selectedOrder.SYSTEM_STATUS}
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <span style={{ color: '#999' }}>-</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {orderDetails && (
+                  <>
+                    <div style={{ 
+                      marginTop: '1.5rem', 
+                      paddingTop: '1.5rem', 
+                      borderTop: '2px solid #e0e0e0' 
+                    }}>
+                      <h4 style={{ color: '#1976d2', marginBottom: '1rem' }}>Material & Quantity Information</h4>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                        <div>
+                          <strong>Material Number:</strong>
+                          <div style={{ marginBottom: '1rem', fontSize: '1rem', color: '#333' }}>
+                            {orderDetails.MATERIAL || '-'}
+                          </div>
+                        </div>
+                        <div>
+                          <strong>Material Description:</strong>
+                          <div style={{ marginBottom: '1rem', fontSize: '1rem', color: '#333' }}>
+                            {orderDetails.MATERIAL_DESC || '-'}
+                          </div>
+                        </div>
+                        <div>
+                          <strong>Target Quantity:</strong>
+                          <div style={{ marginBottom: '1rem', fontSize: '1.1rem', fontWeight: 'bold', color: '#1976d2' }}>
+                            {orderDetails.TARGET_QUANTITY ? `${parseFloat(orderDetails.TARGET_QUANTITY).toFixed(2)} ${orderDetails.UNIT || ''}` : '-'}
+                          </div>
+                        </div>
+                        <div>
+                          <strong>Confirmed Quantity:</strong>
+                          <div style={{ marginBottom: '1rem', fontSize: '1.1rem', fontWeight: 'bold', color: '#4caf50' }}>
+                            {orderDetails.CONFIRMED_QUANTITY ? `${parseFloat(orderDetails.CONFIRMED_QUANTITY).toFixed(2)} ${orderDetails.UNIT || ''}` : '-'}
+                          </div>
+                        </div>
+                        <div>
+                          <strong>Delivered Quantity:</strong>
+                          <div style={{ marginBottom: '1rem', fontSize: '1rem' }}>
+                            {orderDetails.DELIVERED_QUANTITY ? `${parseFloat(orderDetails.DELIVERED_QUANTITY).toFixed(2)} ${orderDetails.UNIT || ''}` : '-'}
+                          </div>
+                        </div>
+                        <div>
+                          <strong>Scrap Quantity:</strong>
+                          <div style={{ marginBottom: '1rem', fontSize: '1rem', color: '#f44336' }}>
+                            {orderDetails.SCRAP_QUANTITY ? `${parseFloat(orderDetails.SCRAP_QUANTITY).toFixed(2)} ${orderDetails.UNIT || ''}` : '-'}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ 
+                      marginTop: '1.5rem', 
+                      paddingTop: '1.5rem', 
+                      borderTop: '1px solid #e0e0e0' 
+                    }}>
+                      <h4 style={{ color: '#1976d2', marginBottom: '1rem' }}>Schedule Information</h4>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                        <div>
+                          <strong>Basic Start Date:</strong>
+                          <div style={{ marginBottom: '1rem' }}>
+                            {formatDate(orderDetails.BASIC_START_DATE) || '-'}
+                          </div>
+                        </div>
+                        <div>
+                          <strong>Basic Finish Date:</strong>
+                          <div style={{ marginBottom: '1rem' }}>
+                            {formatDate(orderDetails.BASIC_FINISH_DATE) || '-'}
+                          </div>
+                        </div>
+                        <div>
+                          <strong>Scheduled Start:</strong>
+                          <div style={{ marginBottom: '1rem' }}>
+                            {formatDate(orderDetails.SCHEDULED_START) || '-'}
+                          </div>
+                        </div>
+                        <div>
+                          <strong>Scheduled Finish:</strong>
+                          <div style={{ marginBottom: '1rem' }}>
+                            {formatDate(orderDetails.SCHEDULED_FINISH) || '-'}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ 
+                      marginTop: '1.5rem', 
+                      paddingTop: '1.5rem', 
+                      borderTop: '1px solid #e0e0e0' 
+                    }}>
+                      <h4 style={{ color: '#1976d2', marginBottom: '1rem' }}>Additional Information</h4>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                        <div>
+                          <strong>Work Center:</strong>
+                          <div style={{ marginBottom: '1rem' }}>
+                            {orderDetails.WORK_CENTER || '-'}
+                          </div>
+                        </div>
+                        <div>
+                          <strong>Production Supervisor:</strong>
+                          <div style={{ marginBottom: '1rem' }}>
+                            {orderDetails.PRODUCTION_SUPERVISOR || '-'}
+                          </div>
+                        </div>
+                        <div>
+                          <strong>Priority:</strong>
+                          <div style={{ marginBottom: '1rem' }}>
+                            {orderDetails.PRIORITY || '-'}
+                          </div>
+                        </div>
+                        <div>
+                          <strong>MRP Controller:</strong>
+                          <div style={{ marginBottom: '1rem' }}>
+                            {orderDetails.MRP_CONTROLLER || '-'}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {orderDetails.OPERATIONS && orderDetails.OPERATIONS.length > 0 && (
+                      <div style={{ 
+                        marginTop: '1.5rem', 
+                        paddingTop: '1.5rem', 
+                        borderTop: '1px solid #e0e0e0' 
+                      }}>
+                        <h4 style={{ color: '#1976d2', marginBottom: '1rem' }}>
+                          Operations ({orderDetails.OPERATIONS.length})
+                        </h4>
+                        <div style={{ 
+                          background: '#f9f9f9', 
+                          padding: '1rem', 
+                          borderRadius: '4px',
+                          border: '1px solid #e0e0e0'
+                        }}>
+                          {orderDetails.OPERATIONS.map((op, index) => (
+                            <div key={index} style={{ 
+                              marginBottom: index < orderDetails.OPERATIONS.length - 1 ? '0.75rem' : '0',
+                              paddingBottom: index < orderDetails.OPERATIONS.length - 1 ? '0.75rem' : '0',
+                              borderBottom: index < orderDetails.OPERATIONS.length - 1 ? '1px solid #ddd' : 'none'
+                            }}>
+                              <div style={{ display: 'flex', gap: '2rem', alignItems: 'center' }}>
+                                <div>
+                                  <strong style={{ color: '#1976d2' }}>Operation:</strong>
+                                  <span style={{ marginLeft: '0.5rem', fontFamily: 'monospace', fontSize: '1.1rem' }}>
+                                    {op.OPERATION}
+                                  </span>
+                                </div>
+                                <div>
+                                  <strong style={{ color: '#1976d2' }}>Work Center:</strong>
+                                  <span style={{ marginLeft: '0.5rem', fontFamily: 'monospace', fontSize: '1.1rem' }}>
+                                    {op.WORK_CENTER}
+                                  </span>
+                                </div>
+                                {op.DESCRIPTION && (
+                                  <div style={{ flex: 1 }}>
+                                    <strong>Description:</strong>
+                                    <span style={{ marginLeft: '0.5rem', color: '#666' }}>
+                                      {op.DESCRIPTION}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        {orderDetails.DEFAULT_OPERATION && (
+                          <div style={{ 
+                            marginTop: '0.75rem', 
+                            padding: '0.75rem', 
+                            background: '#e3f2fd', 
+                            borderRadius: '4px',
+                            fontSize: '0.9rem',
+                            color: '#1976d2'
+                          }}>
+                            💡 <strong>For Confirmation:</strong> Use Operation <code style={{ 
+                              background: 'white', 
+                              padding: '0.2rem 0.4rem', 
+                              borderRadius: '3px',
+                              fontFamily: 'monospace'
+                            }}>{orderDetails.DEFAULT_OPERATION}</code> and Work Center <code style={{ 
+                              background: 'white', 
+                              padding: '0.2rem 0.4rem', 
+                              borderRadius: '3px',
+                              fontFamily: 'monospace'
+                            }}>{orderDetails.DEFAULT_WORK_CENTER}</code>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                <div style={{ gridColumn: '1 / -1', paddingTop: '1rem', marginTop: '1rem', borderTop: '1px solid #e0e0e0' }}>
+                  <strong>Data Source:</strong>
+                  <div style={{ marginTop: '0.5rem' }}>
+                    <span style={{ 
+                      padding: '0.4rem 0.8rem',
+                      borderRadius: '6px',
+                      background: '#e3f2fd',
+                      color: '#1976d2',
+                      fontSize: '0.9rem',
+                      fontWeight: '500'
+                    }}>
+                      SAP ERP System
                     </span>
                   </div>
                 </div>
-              </div>
-              <div>
-                <strong>Status:</strong>
-                <div style={{ marginBottom: '1rem' }}>
-                  <span style={{ 
-                    color: getStatusColor(selectedOrder.STATUS),
-                    fontWeight: 'bold',
-                    padding: '0.25rem 0.5rem',
-                    borderRadius: '12px',
-                    background: `${getStatusColor(selectedOrder.STATUS)}20`
-                  }}>
-                    {selectedOrder.STATUS || 'N/A'}
-                  </span>
-                  {selectedOrder.SYSTEM_STATUS && (
-                    <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '0.25rem' }}>
-                      System: {selectedOrder.SYSTEM_STATUS}
-                    </div>
-                  )}
-                </div>
-              </div>
-              <div>
-                <strong>Created Date:</strong>
-                <div style={{ marginBottom: '1rem' }}>{selectedOrder.CREATED_DATE}</div>
-              </div>
-              <div>
-                <strong>Created By:</strong>
-                <div style={{ marginBottom: '1rem' }}>{selectedOrder.CREATED_BY}</div>
-              </div>
-              <div style={{ gridColumn: '1 / -1', paddingTop: '1rem', borderTop: '1px solid #e0e0e0' }}>
-                <strong>Data Source:</strong>
-                <div style={{ marginTop: '0.5rem' }}>
-                  <span style={{ 
-                    padding: '0.4rem 0.8rem',
-                    borderRadius: '6px',
-                    background: '#e3f2fd',
-                    color: '#1976d2',
-                    fontSize: '0.9rem',
-                    fontWeight: '500'
-                  }}>
-                    SAP ERP System
-                  </span>
-                </div>
-              </div>
-            </div>
+              </>
+            )}
 
             <div style={{ marginTop: '1.5rem', textAlign: 'center' }}>
               <button
-                onClick={() => setSelectedOrder(null)}
+                onClick={() => {
+                  setSelectedOrder(null);
+                  setOrderDetails(null);
+                }}
                 className="btn btn-primary"
               >
                 Close

@@ -64,13 +64,14 @@ router.post("/search", async (req, res) => {
 /**
  * POST /api/production-confirmation/confirm
  * Confirm a production order
- * Body: { productionOrderId, plant, material, yieldQuantity, scrapQuantity, workCenter, confirmationType }
+ * Body: { productionOrderId, plant, operation, material, yieldQuantity, scrapQuantity, workCenter, confirmationType }
  */
 router.post("/confirm", async (req, res) => {
   try {
     const {
       productionOrderId,
       plant,
+      operation,
       material,
       yieldQuantity,
       scrapQuantity,
@@ -81,6 +82,7 @@ router.post("/confirm", async (req, res) => {
     console.log("[Production Confirmation] Confirm request:", {
       productionOrderId,
       plant,
+      operation,
       material,
       yieldQuantity,
       scrapQuantity,
@@ -88,11 +90,12 @@ router.post("/confirm", async (req, res) => {
       confirmationType
     });
 
-    // Validate inputs - material is optional
-    if (!productionOrderId || !plant || !yieldQuantity) {
+    // Validate inputs
+    if (!productionOrderId || !plant || !yieldQuantity || !workCenter || !operation) {
       return res.status(400).json({
         success: false,
-        error: "Missing required fields: productionOrderId, plant, yieldQuantity"
+        error: "Missing required fields: productionOrderId, plant, operation, workCenter, yieldQuantity",
+        source: "SAP_ERP"
       });
     }
 
@@ -101,64 +104,34 @@ router.post("/confirm", async (req, res) => {
       await connect();
     }
 
-    console.log("[Production Confirmation] Step 1: Validating production order exists in SAP...");
-    
-    // Clean the order number before validation - remove special chars and leading zeros
+    console.log("[Production Confirmation] Step 1: Calling BAPI to confirm production order...");
+
+    // Clean the order number - remove special chars but keep leading zeros
     let cleanedOrderId = productionOrderId.replace(/[$#*]/g, '').trim();
-    cleanedOrderId = cleanedOrderId.replace(/^0+/, '') || '0';
-    
-    console.log("[Production Confirmation] Original order ID:", productionOrderId);
-    console.log("[Production Confirmation] Cleaned order ID:", cleanedOrderId);
-    
-    // Pad to 12 digits for SAP query
     const paddedOrderId = cleanedOrderId.padStart(12, '0');
-    console.log("[Production Confirmation] Padded order ID for query:", paddedOrderId);
     
-    // First, verify the production order exists
-    try {
-      const orderCheck = await executeSapFunction(
-        'RFC_READ_TABLE',
-        {
-          QUERY_TABLE: 'AUFK',
-          DELIMITER: '|',
-          FIELDS: [
-            { FIELDNAME: 'AUFNR' },
-            { FIELDNAME: 'WERKS' },
-            { FIELDNAME: 'AUART' }
-          ],
-          OPTIONS: [{ TEXT: `AUFNR = '${paddedOrderId}'` }],
-          ROWCOUNT: 1
-        },
-        {
-          DATA: [{ WA: 'string' }]
-        }
-      );
+    console.log("[Production Confirmation] Order ID:", productionOrderId, "→", paddedOrderId);
 
-      if (!orderCheck.DATA || orderCheck.DATA.length === 0) {
-        return res.status(404).json({
-          success: false,
-          error: `Production order ${cleanedOrderId} not found in SAP`,
-          message: "Please verify the production order number",
-          searchedFor: paddedOrderId
-        });
-      }
-
-      console.log("[Production Confirmation] ✓ Production order found in SAP");
-    } catch (checkError) {
-      console.warn("[Production Confirmation] Could not verify order:", checkError.message);
-    }
-
-    // Use BAPI_PRODORDCONF_CREATE_TT with corrected structure
+    // Use BAPI_PRODORDCONF_CREATE_TT - let SAP handle all validation
     const selectedBAPI = "BAPI_PRODORDCONF_CREATE_TT";
-    console.log(`[Production Confirmation] Step 2: Using BAPI: ${selectedBAPI}`);
+    console.log(`[Production Confirmation] Using BAPI: ${selectedBAPI}`);
 
     // Prepare input data with all required fields for BAPI_PRODORDCONF_CREATE_TT
-    const currentDate = new Date().toISOString().split('T')[0].replace(/-/g, '');
+    // Format date as DD.MM.YYYY for SAP
+    const today = new Date();
+    const day = String(today.getDate()).padStart(2, '0');
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const year = today.getFullYear();
+    const currentDate = `${day}.${month}.${year}`;
+    
+    console.log("[Production Confirmation] Posting date:", currentDate);
     
     const inputData = {
       TIMETICKETS: [{
         ORDERID: paddedOrderId,
+        OPERATION: operation.padStart(4, '0'), // Pad operation to 4 digits
         PLANT: plant,
+        WORK_CNTR: workCenter,
         YIELD: parseFloat(yieldQuantity).toString(),
         SCRAP: parseFloat(scrapQuantity || 0).toString(),
         POSTG_DATE: currentDate,
@@ -168,13 +141,12 @@ router.post("/confirm", async (req, res) => {
       }]
     };
 
-    // Add optional fields
-    if (material) {
+    // Add optional material field
+    if (material && material.trim() !== '') {
       inputData.TIMETICKETS[0].MATERIAL = material.padStart(18, '0');
     }
-    if (workCenter) {
-      inputData.TIMETICKETS[0].WORK_CNTR = workCenter;
-    }
+
+    console.log("[Production Confirmation] BAPI Input:", JSON.stringify(inputData, null, 2));
 
     // Define expected output structure
     const expectedOutputStructure = {
@@ -253,30 +225,19 @@ router.post("/confirm", async (req, res) => {
     if (hasError || !confirmationNumber || confirmationNumber === '0000000000') {
       const errorMessage = errorMessages.length > 0 
         ? errorMessages.join('; ') 
-        : 'Confirmation failed - check production order details (order type, work center, operation may be required)';
+        : 'Confirmation failed';
       
-      console.error("[Production Confirmation] ❌ SAP returned error:", errorMessage);
+      console.error("[Production Confirmation] ❌ SAP Error:", errorMessage);
       return res.status(400).json({
         success: false,
         error: errorMessage,
         sapResponse: executionResult,
-        message: "Failed to confirm production order in SAP",
-        hint: "Make sure the production order exists, is released, and all required fields are provided"
+        source: "SAP_ERP"
       });
     }
 
     console.log("[Production Confirmation] ✅ Confirmation posted to SAP successfully");
     console.log("[Production Confirmation] Confirmation Number:", confirmationNumber);
-
-    if (hasError) {
-      console.error("[Production Confirmation] ❌ SAP returned error:", errorMessage);
-      return res.status(400).json({
-        success: false,
-        error: errorMessage,
-        sapResponse: executionResult,
-        message: "Failed to confirm production order in SAP"
-      });
-    }
 
     // Commit the transaction in SAP
     try {
