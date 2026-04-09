@@ -8,6 +8,8 @@ import cors from "cors";
 import productionConfirmationRoutes from "./routes/productionConfirmation.js";
 import goodsReceiptRoutes from "./routes/goodsReceipt.js";
 import productionOrdersRoutes from "./routes/productionOrders.js";
+import goodsIssueRoutes from "./routes/goodsIssue.js";
+import technicalCompletionRoutes from "./routes/technicalCompletion.js";
 
 // Import MCP tools (these should be available in the Kiro environment)
 export let mcp_pillir_flow_search_sap;
@@ -45,6 +47,8 @@ app.use((req, res, next) => {
 app.use("/api/production-confirmation", productionConfirmationRoutes);
 app.use("/api/goods-receipt", goodsReceiptRoutes);
 app.use("/api/production-orders", productionOrdersRoutes);
+app.use("/api/goods-issue", goodsIssueRoutes);
+app.use("/api/technical-completion", technicalCompletionRoutes);
 
 // Health check endpoint
 app.get("/api/health", (req, res) => {
@@ -73,6 +77,10 @@ app.listen(PORT, () => {
   console.log(`  POST /api/production-confirmation/confirm`);
   console.log(`  POST /api/goods-receipt/search`);
   console.log(`  POST /api/goods-receipt/post`);
+  console.log(`  POST /api/goods-issue/post`);
+  console.log(`  GET  /api/goods-issue/components/:orderId`);
+  console.log(`  POST /api/technical-completion/teco`);
+  console.log(`  GET  /api/technical-completion/status/:orderId`);
   console.log(`  GET  /api/production-orders/confirmations`);
   console.log(`  POST /api/production-orders/search`);
   console.log(`  GET  /api/production-orders/:orderId\n`);

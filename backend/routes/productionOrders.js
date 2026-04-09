@@ -149,55 +149,159 @@ router.post("/search", async (req, res) => {
       }
     }
 
-    // Build query options for SAP
-    const queryOptions = [];
+    // Step 1: Use Pillir Flow to search for the correct BAPI
+    console.log('[Production Orders] Step 1: Searching for correct BAPI using Pillir Flow...');
     
-    // Always filter for production orders only (AUTYP = 10)
-    queryOptions.push({ TEXT: `AUTYP = '10'` });
+    const searchPayload = {
+      name: "Production Order List",
+      description: "Get list of production orders with details like order number, plant, material, status, quantities",
+      apis: [{
+        name: "PP",
+        description: "Production Planning",
+        system_type: "SAP_ECC",
+        functions: [{
+          name: "GET_PRODUCTION_ORDERS",
+          description: "Retrieve production orders list",
+          rfc: true
+        }]
+      }]
+    };
+
+    let selectedBAPI = null;
+    try {
+      const searchResult = await searchSapBapi(searchPayload);
+      console.log('[Production Orders] Search result:', JSON.stringify(searchResult, null, 2));
+      
+      // Extract BAPI name from search result
+      if (searchResult && searchResult.apis && searchResult.apis[0] && 
+          searchResult.apis[0].functions && searchResult.apis[0].functions[0]) {
+        selectedBAPI = searchResult.apis[0].functions[0].name;
+        console.log(`[Production Orders] ✅ Selected BAPI: ${selectedBAPI}`);
+      }
+    } catch (searchError) {
+      console.warn('[Production Orders] ⚠️ BAPI search failed, falling back to RFC_READ_TABLE:', searchError.message);
+    }
+
+    // Step 2: Execute the BAPI or fallback to RFC_READ_TABLE
+    let headerResult;
     
-    // Add plant filter if provided
-    if (plant && plant.trim() !== '') {
-      queryOptions.push({ TEXT: `WERKS = '${plant.trim()}'` });
-      console.log(`[Production Orders] Filtering by plant: ${plant}`);
+    if (selectedBAPI && selectedBAPI !== 'RFC_READ_TABLE') {
+      console.log(`[Production Orders] Step 2: Using discovered BAPI: ${selectedBAPI}`);
+      
+      // Build input parameters based on filters
+      const bapiInput = {};
+      
+      if (plant && plant.trim() !== '') {
+        bapiInput.PLANT = plant.trim();
+        console.log(`[Production Orders] Filtering by plant: ${plant}`);
+      }
+      
+      if (material && material.trim() !== '') {
+        bapiInput.MATERIAL = material.trim();
+        console.log(`[Production Orders] Filtering by material: ${material}`);
+      }
+      
+      // Expected output structure for production orders
+      const expectedOutput = {
+        RETURN: [{
+          TYPE: 'string',
+          MESSAGE: 'string'
+        }],
+        ORDERS: [{
+          AUFNR: 'string',
+          WERKS: 'string',
+          MATNR: 'string',
+          AUART: 'string',
+          GAMNG: 'string',
+          GMEIN: 'string'
+        }]
+      };
+      
+      try {
+        headerResult = await executeSapFunction(selectedBAPI, bapiInput, expectedOutput);
+        console.log(`[Production Orders] BAPI response:`, JSON.stringify(headerResult, null, 2));
+      } catch (bapiError) {
+        console.warn(`[Production Orders] ⚠️ BAPI ${selectedBAPI} failed:`, bapiError.message);
+        console.log('[Production Orders] Falling back to RFC_READ_TABLE...');
+        selectedBAPI = null;
+      }
     }
     
-    console.log(`[Production Orders] Query filters:`, queryOptions);
-    
-    // Fetch a smaller number of records to avoid timeout
-    // If no plant filter, limit to 100 records. With plant filter, allow 300.
-    const rowCount = (plant && plant.trim() !== '') ? 300 : 100;
-    
-    console.log(`[Production Orders] Fetching up to ${rowCount} records from AUFK...`);
-    
-    const headerResult = await executeSapFunction(
-      'RFC_READ_TABLE',
-      {
-        QUERY_TABLE: 'AUFK',
-        DELIMITER: '|',
-        FIELDS: [
-          { FIELDNAME: 'AUFNR' },  // Order number
-          { FIELDNAME: 'AUTYP' },  // Order category (10=Production, 30=Maintenance, etc.)
-          { FIELDNAME: 'WERKS' },  // Plant
-          { FIELDNAME: 'AUART' },  // Order type
-          { FIELDNAME: 'ERDAT' },  // Created date
-          { FIELDNAME: 'ERNAM' },  // Created by
-          { FIELDNAME: 'IDAT1' },  // Release date (if not empty, order is released)
-          { FIELDNAME: 'IDAT2' },  // Completed date
-          { FIELDNAME: 'IDAT3' }   // Closed date
-        ],
-        OPTIONS: queryOptions,
-        ROWCOUNT: rowCount
-      },
-      {
-        DATA: [{ WA: 'string' }]
+    // Fallback to RFC_READ_TABLE if BAPI not found or failed
+    if (!selectedBAPI || !headerResult) {
+      console.log('[Production Orders] Step 2: Using RFC_READ_TABLE (fallback)');
+      
+      // Build query options for SAP
+      const queryOptions = [];
+      
+      // Always filter for production orders only (AUTYP = 10)
+      queryOptions.push({ TEXT: `AUTYP = '10'` });
+      
+      // Add plant filter if provided
+      if (plant && plant.trim() !== '') {
+        queryOptions.push({ TEXT: `AND WERKS = '${plant.trim()}'` });
+        console.log(`[Production Orders] Filtering by plant: ${plant}`);
       }
-    );
+      
+      console.log(`[Production Orders] Query filters:`, queryOptions);
+      
+      // Fetch a smaller number of records to avoid timeout
+      const rowCount = (plant && plant.trim() !== '') ? 300 : 100;
+      
+      console.log(`[Production Orders] Fetching up to ${rowCount} records from AUFK...`);
+      
+      headerResult = await executeSapFunction(
+        'RFC_READ_TABLE',
+        {
+          QUERY_TABLE: 'AUFK',
+          DELIMITER: '|',
+          FIELDS: [
+            { FIELDNAME: 'AUFNR' },
+            { FIELDNAME: 'AUTYP' },
+            { FIELDNAME: 'WERKS' },
+            { FIELDNAME: 'AUART' },
+            { FIELDNAME: 'ERDAT' },
+            { FIELDNAME: 'ERNAM' },
+            { FIELDNAME: 'IDAT1' },
+            { FIELDNAME: 'IDAT2' },
+            { FIELDNAME: 'IDAT3' }
+          ],
+          OPTIONS: queryOptions,
+          ROWCOUNT: rowCount
+        },
+        {
+          DATA: [{ WA: 'string' }],
+          RETURN: [{ TYPE: 'string', MESSAGE: 'string' }]
+        }
+      );
+      
+      selectedBAPI = 'RFC_READ_TABLE';
+    }
 
-    console.log(`[Production Orders] Retrieved ${headerResult.DATA?.length || 0} records from SAP AUFK table`);
+    console.log(`[Production Orders] Retrieved ${headerResult.DATA?.length || headerResult.ORDERS?.length || 0} records from SAP`);
+    console.log(`[Production Orders] Full SAP response:`, JSON.stringify(headerResult, null, 2));
 
     // Check if we got data
-    if (!headerResult.DATA || !Array.isArray(headerResult.DATA)) {
-      console.error("[Production Orders] No DATA in response");
+    if ((!headerResult.DATA || !Array.isArray(headerResult.DATA)) && 
+        (!headerResult.ORDERS || !Array.isArray(headerResult.ORDERS))) {
+      console.error("[Production Orders] No DATA or ORDERS in response");
+      console.error("[Production Orders] Response structure:", Object.keys(headerResult));
+      
+      // Check for SAP errors
+      if (headerResult.RETURN && Array.isArray(headerResult.RETURN)) {
+        const errors = headerResult.RETURN.filter(r => r.TYPE === 'E' || r.TYPE === 'A');
+        if (errors.length > 0) {
+          const errorMessage = errors.map(e => e.MESSAGE).join('; ');
+          console.error("[Production Orders] SAP Error:", errorMessage);
+          return res.status(400).json({
+            success: false,
+            error: errorMessage,
+            message: "SAP returned an error",
+            source: "SAP_ERP"
+          });
+        }
+      }
+      
       return res.json({
         success: true,
         data: [],
@@ -210,14 +314,36 @@ router.post("/search", async (req, res) => {
           hasNextPage: false,
           hasPrevPage: false
         },
-        message: "No production orders found",
-        source: "SAP_ERP"
+        message: "No production orders found in SAP. This could be due to: 1) No orders matching the criteria, 2) Authorization issues, or 3) MCP connection issue. Try reconnecting or check SAP authorization.",
+        source: "SAP_ERP",
+        debug: {
+          selectedBAPI: selectedBAPI,
+          responseKeys: Object.keys(headerResult)
+        }
       });
     }
 
-    // Parse the data - status is determined from IDAT fields
-    const allOrders = parseSapTableData(headerResult);
-    console.log(`[Production Orders] Parsed ${allOrders.length} production orders from AUFK`);
+    // Parse the data based on response type
+    let allOrders;
+    if (headerResult.ORDERS && Array.isArray(headerResult.ORDERS)) {
+      // BAPI response
+      console.log(`[Production Orders] Parsing ${headerResult.ORDERS.length} orders from BAPI response`);
+      allOrders = headerResult.ORDERS.map(order => ({
+        PRODUCTION_ORDER: order.AUFNR?.replace(/^0+/, '') || '',
+        PLANT: order.WERKS || '',
+        ORDER_TYPE: order.AUART || '',
+        MATERIAL: order.MATNR?.replace(/^0+/, '') || '',
+        TARGET_QUANTITY: order.GAMNG || '0',
+        UNIT: order.GMEIN || '',
+        STATUS: 'Released', // BAPI typically returns only released orders
+        CREATED_DATE: order.ERDAT || '',
+        CREATED_BY: order.ERNAM || ''
+      }));
+    } else {
+      // RFC_READ_TABLE response
+      allOrders = parseSapTableData(headerResult);
+      console.log(`[Production Orders] Parsed ${allOrders.length} production orders from RFC_READ_TABLE`);
+    }
 
     // Log sample of first few orders to verify data
     if (allOrders.length > 0) {

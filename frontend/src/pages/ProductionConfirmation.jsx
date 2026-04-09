@@ -1,16 +1,39 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 
 function ProductionConfirmation() {
+  const location = useLocation();
+  
+  // Get pre-filled data from execution flow
+  const prefilledOrderId = location.state?.orderId || '';
+  const prefilledOrderData = location.state?.orderData || null;
+  
   const [formData, setFormData] = useState({
-    productionOrderId: '',
-    plant: '',
+    productionOrderId: prefilledOrderId,
+    plant: prefilledOrderData?.PLANT || '',
     operation: '0010',
-    material: '',
+    material: prefilledOrderData?.MATERIAL || '',
     yieldQuantity: '',
     scrapQuantity: '',
-    workCenter: '',
+    workCenter: prefilledOrderData?.OPERATIONS?.[0]?.WORK_CENTER || '',
     confirmationType: 'P'
   });
+
+  // Update form when pre-filled data changes
+  useEffect(() => {
+    if (prefilledOrderId || prefilledOrderData) {
+      setFormData({
+        productionOrderId: prefilledOrderId,
+        plant: prefilledOrderData?.PLANT || '',
+        operation: '0010',
+        material: prefilledOrderData?.MATERIAL || '',
+        yieldQuantity: '',
+        scrapQuantity: '',
+        workCenter: prefilledOrderData?.OPERATIONS?.[0]?.WORK_CENTER || '',
+        confirmationType: 'P'
+      });
+    }
+  }, [prefilledOrderId, prefilledOrderData]);
 
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);

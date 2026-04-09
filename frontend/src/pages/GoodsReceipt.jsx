@@ -1,13 +1,33 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 
 function GoodsReceipt() {
+  const location = useLocation();
+  
+  // Get pre-filled data from execution flow
+  const prefilledOrderId = location.state?.orderId || '';
+  const prefilledOrderData = location.state?.orderData || null;
+  
   const [formData, setFormData] = useState({
-    productionOrderId: '',
-    material: '',
-    plant: '',
+    productionOrderId: prefilledOrderId,
+    material: prefilledOrderData?.MATERIAL || '',
+    plant: prefilledOrderData?.PLANT || '',
     receivedQuantity: '',
     storageLocation: ''
   });
+
+  // Update form when pre-filled data changes
+  useEffect(() => {
+    if (prefilledOrderId || prefilledOrderData) {
+      setFormData({
+        productionOrderId: prefilledOrderId,
+        material: prefilledOrderData?.MATERIAL || '',
+        plant: prefilledOrderData?.PLANT || '',
+        receivedQuantity: '',
+        storageLocation: ''
+      });
+    }
+  }, [prefilledOrderId, prefilledOrderData]);
 
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);

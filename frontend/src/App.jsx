@@ -3,6 +3,10 @@ import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react
 import ProductionConfirmation from './pages/ProductionConfirmation';
 import GoodsReceipt from './pages/GoodsReceipt';
 import ProductionOrders from './pages/ProductionOrders';
+import ProductionOrderScan from './pages/ProductionOrderScan';
+import ProductionExecution from './pages/ProductionExecution';
+import GoodsIssue from './pages/GoodsIssue';
+import TechnicalCompletion from './pages/TechnicalCompletion';
 
 function Navigation() {
   const location = useLocation();
@@ -24,6 +28,14 @@ function Navigation() {
         </li>
         <li>
           <Link 
+            to="/production-execution-scan" 
+            className={location.pathname === '/production-execution-scan' ? 'active' : ''}
+          >
+            Execution Flow
+          </Link>
+        </li>
+        <li>
+          <Link 
             to="/" 
             className={location.pathname === '/' ? 'active' : ''}
           >
@@ -32,10 +44,26 @@ function Navigation() {
         </li>
         <li>
           <Link 
+            to="/goods-issue" 
+            className={location.pathname === '/goods-issue' ? 'active' : ''}
+          >
+            Goods Issue
+          </Link>
+        </li>
+        <li>
+          <Link 
             to="/goods-receipt" 
             className={location.pathname === '/goods-receipt' ? 'active' : ''}
           >
             Goods Receipt
+          </Link>
+        </li>
+        <li>
+          <Link 
+            to="/technical-completion" 
+            className={location.pathname === '/technical-completion' ? 'active' : ''}
+          >
+            TECO
           </Link>
         </li>
       </ul>
@@ -51,7 +79,11 @@ function App() {
         <Routes>
           <Route path="/" element={<ProductionConfirmation />} />
           <Route path="/goods-receipt" element={<GoodsReceipt />} />
+          <Route path="/goods-issue" element={<GoodsIssue />} />
+          <Route path="/technical-completion" element={<TechnicalCompletion />} />
           <Route path="/production-orders" element={<ProductionOrders />} />
+          <Route path="/production-execution-scan" element={<ProductionOrderScan />} />
+          <Route path="/production-execution/:orderId" element={<ProductionExecution />} />
         </Routes>
       </div>
     </Router>
